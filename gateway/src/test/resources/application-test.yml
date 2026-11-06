@@ -1,0 +1,14 @@
+# Test profile. Datasource comes from the Testcontainers Postgres via @ServiceConnection.
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+
+fluxpay:
+  payment:
+    expiry: 15m
+  scheduling:
+    # Off so the sweeper never fires on its own; tests call orchestrator.expireOverdue() directly.
+    enabled: false

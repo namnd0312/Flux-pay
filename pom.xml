@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+      Aggregator (packaging=pom) for the Flux-pay mini payment gateway.
+      Two Spring Boot 4.1 apps build from here:
+        - gateway       : the modular monolith (port 8080)
+        - mock-provider : a fake VNPAY-style provider (port 8081)
+      The Spring Boot parent gives both modules a managed dependency BOM,
+      so module POMs omit versions for Spring-managed artifacts.
+    -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.2</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.fluxpay</groupId>
+    <artifactId>flux-pay</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <packaging>pom</packaging>
+    <name>flux-pay</name>
+    <description>Mini payment gateway (learning-first). Increment 1: core payment lifecycle.</description>
+
+    <properties>
+        <java.version>21</java.version>
+    </properties>
+
+    <modules>
+        <module>gateway</module>
+        <module>mock-provider</module>
+    </modules>
+</project>

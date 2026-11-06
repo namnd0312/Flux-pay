@@ -1,0 +1,36 @@
+spring:
+  application:
+    name: flux-pay-gateway
+  profiles:
+    # Local runs use "dev" (reads the root .env via compose). Tests activate "test".
+    default: dev
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/flux_pay}
+    username: ${DB_USER:flux_pay}
+    password: ${DB_PASSWORD:}
+  jpa:
+    # Keep the persistence context out of the view layer; every query runs inside an explicit transaction.
+    open-in-view: false
+    hibernate:
+      # Flyway owns the schema. validate makes Hibernate fail fast if entities drift from the migrations.
+      ddl-auto: validate
+  flyway:
+    enabled: true
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+
+fluxpay:
+  payment:
+    # How long a PENDING payment stays payable before the sweeper expires it. Demo/env may override to 1m.
+    expiry: 15m
+  scheduling:
+    # Master switch for the expiry sweeper. Disabled in the test profile.
+    enabled: true
+    sweep-interval: 30s

@@ -1,6 +1,11 @@
 spring:
   application:
     name: flux-pay-gateway
+  http:
+    client:
+      # Global client timeouts; the provider adapter inherits these (no per-adapter factory override).
+      connect-timeout: 2s
+      read-timeout: 5s
   profiles:
     # Local runs use "dev" (reads the root .env via compose). Tests activate "test".
     default: dev
@@ -27,9 +32,16 @@ management:
         include: health
 
 fluxpay:
+  providers:
+    # Provider resolved when the request omits one. Adapters register by code (e.g. MOCK).
+    default: MOCK
+    mock:
+      base-url: ${FLUXPAY_PROVIDERS_MOCK_BASE_URL:http://localhost:8081}
   payment:
     # How long a PENDING payment stays payable before the sweeper expires it. Demo/env may override to 1m.
     expiry: 15m
+    # CREATED rows older than this are failed by the sweeper (create crashed before PENDING).
+    created-timeout: 2m
   scheduling:
     # Master switch for the expiry sweeper. Disabled in the test profile.
     enabled: true

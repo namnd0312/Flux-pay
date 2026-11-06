@@ -6,12 +6,14 @@ import jakarta.validation.constraints.Size;
 
 /**
  * Body of {@code POST /api/v1/payments}. VND amount is a positive long (VND has no
- * sub-unit). The {@code provider} selector is added in phase 3; {@code returnUrl} is the
- * browser redirect target, not a server callback.
+ * sub-unit). {@code provider} selects which provider to route to (defaults to the
+ * configured provider when blank). {@code returnUrl} is the browser redirect target, not
+ * a server callback.
  */
 public record CreatePaymentRequest(
         @NotBlank @Size(max = 100) String orderId,
         @Positive long amount,
         @Size(max = 500) String description,
-        @Size(max = 500) String returnUrl) {
+        @Size(max = 500) String returnUrl,
+        @Size(max = 40) String provider) {
 }

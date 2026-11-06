@@ -21,7 +21,7 @@ import org.testcontainers.utility.DockerImageName;
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-@Import(MutableClock.Config.class)
+@Import({MutableClock.Config.class, CountingFakeProvider.Config.class})
 public abstract class AbstractIntegrationTest {
 
     @ServiceConnection

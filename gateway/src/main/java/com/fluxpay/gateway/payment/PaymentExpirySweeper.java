@@ -30,8 +30,9 @@ class PaymentExpirySweeper {
     @Scheduled(fixedDelayString = "${fluxpay.scheduling.sweep-interval:30s}")
     void sweep() {
         int expired = orchestrator.expireOverdue();
-        if (expired > 0) {
-            log.info("Expiry sweeper moved {} payment(s) to EXPIRED", expired);
+        int abandoned = orchestrator.failAbandonedCreated();
+        if (expired > 0 || abandoned > 0) {
+            log.info("Sweeper moved {} payment(s) to EXPIRED and failed {} abandoned CREATED row(s)", expired, abandoned);
         }
     }
 }

@@ -9,6 +9,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import com.fluxpay.gateway.merchant.UnknownMerchantException;
 import com.fluxpay.gateway.payment.IllegalPaymentTransitionException;
 import com.fluxpay.gateway.payment.PaymentNotFoundException;
+import com.fluxpay.gateway.provider.ProviderException;
+import com.fluxpay.gateway.provider.UnknownProviderException;
 
 /**
  * Maps exceptions to RFC 7807 problem details with a stable {@code code} field. Each
@@ -41,6 +43,18 @@ public class ProblemDetailsHandler {
     @ExceptionHandler(IllegalPaymentTransitionException.class)
     public ProblemDetail onIllegalTransition(IllegalPaymentTransitionException ex) {
         return writer.build(HttpStatus.CONFLICT, "PAYMENT_ILLEGAL_TRANSITION", ex.getMessage());
+    }
+
+    /** Requested provider code has no adapter. */
+    @ExceptionHandler(UnknownProviderException.class)
+    public ProblemDetail onUnknownProvider(UnknownProviderException ex) {
+        return writer.build(HttpStatus.BAD_REQUEST, "UNKNOWN_PROVIDER", ex.getMessage());
+    }
+
+    /** Provider call failed. The cause is already logged; the body carries no exception text. */
+    @ExceptionHandler(ProviderException.class)
+    public ProblemDetail onProviderFailure(ProviderException ex) {
+        return writer.build(HttpStatus.BAD_GATEWAY, ex.getReasonCode(), "Payment provider is temporarily unavailable.");
     }
 
     /** Bean-validation failure on a request body. */

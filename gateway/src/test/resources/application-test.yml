@@ -7,8 +7,12 @@ spring:
     enabled: true
 
 fluxpay:
+  providers:
+    # CountingFakeProvider registers code MOCK under the test profile (the real adapter is excluded).
+    default: MOCK
   payment:
     expiry: 15m
+    created-timeout: 2m
   scheduling:
-    # Off so the sweeper never fires on its own; tests call orchestrator.expireOverdue() directly.
+    # Off so the sweeper never fires on its own; tests call the sweep methods directly.
     enabled: false

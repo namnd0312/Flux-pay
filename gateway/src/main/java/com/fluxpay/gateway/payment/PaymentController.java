@@ -42,7 +42,7 @@ public class PaymentController {
     public CreatePaymentResponse create(@RequestHeader(name = "X-Merchant-Id", required = false) String apiKey,
             @Valid @RequestBody CreatePaymentRequest req) {
         UUID merchantId = merchants.resolve(apiKey);
-        Payment payment = orchestrator.create(merchantId, req.orderId(), req.amount());
+        Payment payment = orchestrator.create(merchantId, req.orderId(), req.amount(), req.provider());
         return CreatePaymentResponse.from(payment);
     }
 

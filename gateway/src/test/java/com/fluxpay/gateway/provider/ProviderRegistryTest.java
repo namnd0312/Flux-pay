@@ -21,6 +21,16 @@ class ProviderRegistryTest {
             public ProviderPaymentResult createPayment(ProviderPaymentRequest request) {
                 return new ProviderPaymentResult("ref", "url");
             }
+
+            @Override
+            public boolean verifyWebhookSignature(byte[] rawBody, java.util.Map<String, String> headers) {
+                return true;
+            }
+
+            @Override
+            public ProviderWebhookEvent parseWebhook(byte[] rawBody) {
+                return null;
+            }
         };
     }
 

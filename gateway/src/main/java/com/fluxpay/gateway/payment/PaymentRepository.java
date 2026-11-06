@@ -19,6 +19,9 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
 
     Optional<Payment> findByIdAndMerchantId(UUID id, UUID merchantId);
 
+    /** Webhook path: resolve the payment a provider event refers to (no merchant scope). */
+    Optional<Payment> findByProviderCodeAndProviderRef(String providerCode, String providerRef);
+
     /** System path only (expiry sweeper). Returns ids so each row can expire in its own tx. */
     @Query("select p.id from Payment p where p.status = :status and p.expiresAt < :before")
     List<UUID> findOverdueIds(@Param("status") PaymentStatus status, @Param("before") Instant before);

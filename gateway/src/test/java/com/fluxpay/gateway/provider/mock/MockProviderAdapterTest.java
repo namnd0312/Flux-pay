@@ -12,10 +12,12 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.restclient.test.autoconfigure.RestClientTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.client.MockRestServiceServer;
 
+import com.fluxpay.gateway.common.HmacSigner;
 import com.fluxpay.gateway.provider.ProviderException;
 import com.fluxpay.gateway.provider.ProviderPaymentRequest;
 import com.fluxpay.gateway.provider.ProviderPaymentResult;
@@ -26,7 +28,10 @@ import com.fluxpay.gateway.provider.ProviderPaymentResult;
  * ProviderException rather than leaking out.
  */
 @RestClientTest(MockProviderAdapter.class)
-@TestPropertySource(properties = "fluxpay.providers.mock.base-url=http://provider.test")
+@Import(HmacSigner.class)
+@TestPropertySource(properties = {
+        "fluxpay.providers.mock.base-url=http://provider.test",
+        "fluxpay.providers.mock.webhook-secret=unit-secret"})
 class MockProviderAdapterTest {
 
     @Autowired

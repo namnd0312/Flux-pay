@@ -12,4 +12,9 @@ public record PaymentSession(
         String description,
         String returnUrl,
         String status) {
+
+    /** Return a copy with a new status (records are immutable). */
+    public PaymentSession withStatus(String newStatus) {
+        return new PaymentSession(providerRef, merchantRef, amount, description, returnUrl, newStatus);
+    }
 }

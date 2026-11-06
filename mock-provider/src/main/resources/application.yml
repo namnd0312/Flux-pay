@@ -1,6 +1,11 @@
 spring:
   application:
     name: flux-pay-mock-provider
+  http:
+    client:
+      # Webhook sender timeouts: fail fast rather than hang a sender thread.
+      connect-timeout: 2s
+      read-timeout: 5s
 
 server:
   port: 8081
@@ -10,3 +15,15 @@ management:
     web:
       exposure:
         include: health
+
+mock:
+  # Must equal the gateway's fluxpay.providers.mock.webhook-secret.
+  secret: ${MOCK_SECRET:mock-webhook-secret-dev}
+  # Where webhooks are POSTed. localhost in dev, the gateway service name in Docker.
+  gateway-webhook-url: ${MOCK_GATEWAY_WEBHOOK_URL:http://localhost:8080}
+  # Base of the pay URL handed back to the gateway/customer.
+  public-base-url: ${MOCK_PUBLIC_BASE_URL:http://localhost:8081}
+  callback:
+    # Knobs for the phase-4 demos: delay a webhook, or send it more than once (same eventId).
+    delay-ms: ${MOCK_CALLBACK_DELAY_MS:0}
+    duplicates: ${MOCK_CALLBACK_DUPLICATES:0}

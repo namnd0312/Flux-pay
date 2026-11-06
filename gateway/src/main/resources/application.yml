@@ -37,6 +37,8 @@ fluxpay:
     default: MOCK
     mock:
       base-url: ${FLUXPAY_PROVIDERS_MOCK_BASE_URL:http://localhost:8081}
+      # Shared HMAC key; must equal mock.secret on the mock-provider. Dev default, override in prod.
+      webhook-secret: ${FLUXPAY_PROVIDERS_MOCK_WEBHOOK_SECRET:mock-webhook-secret-dev}
   payment:
     # How long a PENDING payment stays payable before the sweeper expires it. Demo/env may override to 1m.
     expiry: 15m

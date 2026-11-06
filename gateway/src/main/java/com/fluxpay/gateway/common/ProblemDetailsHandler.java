@@ -11,6 +11,9 @@ import com.fluxpay.gateway.payment.IllegalPaymentTransitionException;
 import com.fluxpay.gateway.payment.PaymentNotFoundException;
 import com.fluxpay.gateway.provider.ProviderException;
 import com.fluxpay.gateway.provider.UnknownProviderException;
+import com.fluxpay.gateway.webhook.WebhookBadSignatureException;
+import com.fluxpay.gateway.webhook.WebhookPayloadTooLargeException;
+import com.fluxpay.gateway.webhook.WebhookUnknownProviderException;
 
 /**
  * Maps exceptions to RFC 7807 problem details with a stable {@code code} field. Each
@@ -55,6 +58,24 @@ public class ProblemDetailsHandler {
     @ExceptionHandler(ProviderException.class)
     public ProblemDetail onProviderFailure(ProviderException ex) {
         return writer.build(HttpStatus.BAD_GATEWAY, ex.getReasonCode(), "Payment provider is temporarily unavailable.");
+    }
+
+    /** Inbound webhook posted to an unknown provider code. */
+    @ExceptionHandler(WebhookUnknownProviderException.class)
+    public ProblemDetail onWebhookUnknownProvider(WebhookUnknownProviderException ex) {
+        return writer.build(HttpStatus.NOT_FOUND, "WEBHOOK_UNKNOWN_PROVIDER", ex.getMessage());
+    }
+
+    /** Inbound webhook with a bad signature. Rejected before any row is written. */
+    @ExceptionHandler(WebhookBadSignatureException.class)
+    public ProblemDetail onWebhookBadSignature(WebhookBadSignatureException ex) {
+        return writer.build(HttpStatus.UNAUTHORIZED, "WEBHOOK_BAD_SIGNATURE", ex.getMessage());
+    }
+
+    /** Inbound webhook body over the size cap. */
+    @ExceptionHandler(WebhookPayloadTooLargeException.class)
+    public ProblemDetail onWebhookTooLarge(WebhookPayloadTooLargeException ex) {
+        return writer.build(HttpStatus.PAYLOAD_TOO_LARGE, "WEBHOOK_PAYLOAD_TOO_LARGE", ex.getMessage());
     }
 
     /** Bean-validation failure on a request body. */

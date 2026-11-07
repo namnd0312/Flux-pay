@@ -6,6 +6,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import com.fluxpay.gateway.idempotency.IdempotencyService;
+
 /**
  * Periodically moves overdue PENDING payments to EXPIRED through the state machine, so
  * EXPIRED is reachable for the late-webhook demo in phase 4. Gated by the same flag as
@@ -22,17 +24,21 @@ class PaymentExpirySweeper {
     private static final Logger log = LoggerFactory.getLogger(PaymentExpirySweeper.class);
 
     private final PaymentOrchestrator orchestrator;
+    private final IdempotencyService idempotency;
 
-    PaymentExpirySweeper(PaymentOrchestrator orchestrator) {
+    PaymentExpirySweeper(PaymentOrchestrator orchestrator, IdempotencyService idempotency) {
         this.orchestrator = orchestrator;
+        this.idempotency = idempotency;
     }
 
     @Scheduled(fixedDelayString = "${fluxpay.scheduling.sweep-interval:30s}")
     void sweep() {
         int expired = orchestrator.expireOverdue();
         int abandoned = orchestrator.failAbandonedCreated();
-        if (expired > 0 || abandoned > 0) {
-            log.info("Sweeper moved {} payment(s) to EXPIRED and failed {} abandoned CREATED row(s)", expired, abandoned);
+        int purgedKeys = idempotency.purgeExpired();
+        if (expired > 0 || abandoned > 0 || purgedKeys > 0) {
+            log.info("Sweeper moved {} payment(s) to EXPIRED, failed {} abandoned CREATED row(s), "
+                    + "purged {} expired idempotency key(s)", expired, abandoned, purgedKeys);
         }
     }
 }

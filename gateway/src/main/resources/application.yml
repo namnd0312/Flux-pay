@@ -32,6 +32,19 @@ management:
         include: health
 
 fluxpay:
+  # AES-256 key (base64, 32 bytes) for merchant secret encryption. No default on purpose:
+  # the app must fail to start if it is unset (see SecretCipher). Dev value lives in .env.
+  secret-key: ${FLUXPAY_SECRET_KEY:}
+  auth:
+    # A request whose X-Timestamp is further than this from "now" is rejected (replay bound).
+    timestamp-tolerance: 5m
+    # Hard cap on the authenticated request body before buffering it for signing (413 over this).
+    max-body-bytes: 65536
+  idempotency:
+    # How long a stored idempotency key is replayable before the sweeper purges it.
+    ttl: 24h
+    # How long an IN_PROGRESS key holds its lease before another retry may take over (dead worker).
+    lease: 60s
   providers:
     # Provider resolved when the request omits one. Adapters register by code (e.g. MOCK).
     default: MOCK

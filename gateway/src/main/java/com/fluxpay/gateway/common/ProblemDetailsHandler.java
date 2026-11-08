@@ -6,7 +6,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
-import com.fluxpay.gateway.merchant.UnknownMerchantException;
+import com.fluxpay.gateway.idempotency.OrderAlreadyExistsException;
 import com.fluxpay.gateway.payment.IllegalPaymentTransitionException;
 import com.fluxpay.gateway.payment.PaymentNotFoundException;
 import com.fluxpay.gateway.provider.ProviderException;
@@ -30,16 +30,16 @@ public class ProblemDetailsHandler {
         this.writer = writer;
     }
 
-    /** Unknown/inactive/missing merchant: identity could not be established. */
-    @ExceptionHandler(UnknownMerchantException.class)
-    public ProblemDetail onUnknownMerchant(UnknownMerchantException ex) {
-        return writer.build(HttpStatus.UNAUTHORIZED, "AUTH_UNKNOWN_MERCHANT", ex.getMessage());
-    }
-
     /** Payment id absent or owned by another merchant: indistinguishable on purpose. */
     @ExceptionHandler(PaymentNotFoundException.class)
     public ProblemDetail onPaymentNotFound(PaymentNotFoundException ex) {
         return writer.build(HttpStatus.NOT_FOUND, "PAYMENT_NOT_FOUND", ex.getMessage());
+    }
+
+    /** A live payment already exists for this (merchant, order): duplicate order, not a retry. */
+    @ExceptionHandler(OrderAlreadyExistsException.class)
+    public ProblemDetail onOrderAlreadyExists(OrderAlreadyExistsException ex) {
+        return writer.build(HttpStatus.CONFLICT, "ORDER_ALREADY_EXISTS", ex.getMessage());
     }
 
     /** A move the transition table forbids (e.g. cancel a terminal payment). */

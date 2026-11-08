@@ -1,5 +1,9 @@
 # Test profile. Datasource comes from the Testcontainers Postgres via @ServiceConnection.
 spring:
+  datasource:
+    hikari:
+      # Headroom for ConcurrentCreateIT (50 threads racing the same create).
+      maximum-pool-size: 20
   jpa:
     hibernate:
       ddl-auto: validate
@@ -7,6 +11,9 @@ spring:
     enabled: true
 
 fluxpay:
+  # Dev-only AES key, committed so `./mvnw verify` needs no env vars. NEVER reuse in prod.
+  # Same key encrypted the DEMO secret in V5, so the startup self-check and auth both pass.
+  secret-key: woTutwqDuw6XWQ5m5yWqZcE4nBglcAs9sIHaBw/5tKo=
   providers:
     # CountingFakeProvider registers code MOCK under the test profile (the real adapter is excluded).
     default: MOCK

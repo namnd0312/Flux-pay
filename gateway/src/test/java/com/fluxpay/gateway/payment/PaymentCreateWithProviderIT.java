@@ -17,6 +17,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import com.fluxpay.gateway.AbstractIntegrationTest;
 import com.fluxpay.gateway.CountingFakeProvider;
+import com.fluxpay.gateway.MutableClock;
 
 /**
  * Create through the provider layer: happy path goes PENDING with exactly one provider
@@ -37,9 +38,13 @@ class PaymentCreateWithProviderIT extends AbstractIntegrationTest {
     @Autowired
     JdbcClient jdbc;
 
+    @Autowired
+    MutableClock clock;
+
     @AfterEach
     void resetFake() {
         fake.reset();
+        clock.reset();
     }
 
     private String body(String orderId, String provider) {
@@ -50,8 +55,9 @@ class PaymentCreateWithProviderIT extends AbstractIntegrationTest {
     @Test
     void happyPathGoesPendingWithOneProviderCall() throws Exception {
         fake.reset();
-        mvc.perform(post("/api/v1/payments").header("X-Merchant-Id", DEMO)
-                        .contentType(MediaType.APPLICATION_JSON).content(body("ORD-" + UUID.randomUUID(), null)))
+        String content = body("ORD-" + UUID.randomUUID(), null);
+        mvc.perform(post("/api/v1/payments").contentType(MediaType.APPLICATION_JSON).content(content)
+                        .with(hmac(DEMO, DEMO_SECRET, clock.millis(), "idem-" + UUID.randomUUID())))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.status").value("PENDING"))
                 .andExpect(jsonPath("$.payUrl", containsString("/mock/v1/pay/")));
@@ -62,8 +68,8 @@ class PaymentCreateWithProviderIT extends AbstractIntegrationTest {
     void providerDownCompensatesToFailedWith502() throws Exception {
         fake.failNextCalls(true);
         String orderId = "ORD-" + UUID.randomUUID();
-        mvc.perform(post("/api/v1/payments").header("X-Merchant-Id", DEMO)
-                        .contentType(MediaType.APPLICATION_JSON).content(body(orderId, null)))
+        mvc.perform(post("/api/v1/payments").contentType(MediaType.APPLICATION_JSON).content(body(orderId, null))
+                        .with(hmac(DEMO, DEMO_SECRET, clock.millis(), "idem-" + UUID.randomUUID())))
                 .andExpect(status().isBadGateway())
                 .andExpect(jsonPath("$.code").value("PROVIDER_UNAVAILABLE"))
                 .andExpect(jsonPath("$.detail", not(containsString("Simulated"))));
@@ -76,8 +82,8 @@ class PaymentCreateWithProviderIT extends AbstractIntegrationTest {
     @Test
     void unknownProviderIs400WithNoRow() throws Exception {
         String orderId = "ORD-" + UUID.randomUUID();
-        mvc.perform(post("/api/v1/payments").header("X-Merchant-Id", DEMO)
-                        .contentType(MediaType.APPLICATION_JSON).content(body(orderId, "NOPE")))
+        mvc.perform(post("/api/v1/payments").contentType(MediaType.APPLICATION_JSON).content(body(orderId, "NOPE"))
+                        .with(hmac(DEMO, DEMO_SECRET, clock.millis(), "idem-" + UUID.randomUUID())))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("UNKNOWN_PROVIDER"));
 

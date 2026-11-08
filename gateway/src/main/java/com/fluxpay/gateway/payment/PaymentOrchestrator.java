@@ -8,11 +8,13 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import com.fluxpay.gateway.idempotency.OrderAlreadyExistsException;
 import com.fluxpay.gateway.provider.PaymentProvider;
 import com.fluxpay.gateway.provider.ProviderException;
 import com.fluxpay.gateway.provider.ProviderPaymentRequest;
@@ -80,7 +82,14 @@ public class PaymentOrchestrator {
         var payment = new Payment(UUID.randomUUID(), merchantId, orderId, amount, now.plus(expiry), now);
         UUID id = payment.getId();
 
-        tx.execute(status -> payments.save(payment)); // tx1: CREATED committed
+        try {
+            // tx1: CREATED committed. saveAndFlush forces the insert now, so a duplicate live
+            // order (partial unique index ux_payments_live_order) fails here instead of later.
+            tx.execute(status -> payments.saveAndFlush(payment));
+        } catch (DataIntegrityViolationException ex) {
+            // Another live payment for (merchant, orderId) already exists; no row was committed.
+            throw new OrderAlreadyExistsException(orderId);
+        }
 
         ProviderPaymentResult result;
         try {

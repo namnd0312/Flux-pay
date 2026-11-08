@@ -22,9 +22,10 @@ flux-pay/
 
 ## Run
 
-With Docker running:
+With Docker running, copy the dev env file first (it carries the secret-encryption key the gateway needs to start):
 
 ```bash
+cp .env.example .env
 docker compose up --build
 ```
 
@@ -54,6 +55,37 @@ Boot 4 renamed and split several starters. Tutorials written for Boot 3 use the 
 | RestClient | bundled in `-web` | `spring-boot-starter-restclient` (separate) |
 | MVC test | `spring-boot-starter-test` | `spring-boot-starter-webmvc-test` |
 | RestClient test | — | `spring-boot-starter-restclient-test` |
+
+## Merchant authentication (phase 5)
+
+Every `/api/**` request is HMAC-signed, VNPAY/MoMo style. The merchant sends:
+
+- `X-Merchant-Id` — the api key (identifies the merchant)
+- `X-Timestamp` — epoch millis (must be within 5 minutes of the gateway clock)
+- `X-Signature` — `HMAC-SHA256(secret, canonical)` as lowercase hex
+
+where `canonical` is `METHOD\nPATH\nX-Timestamp\nIdempotency-Key\nsha256hex(body)` (UTF-8).
+`/webhooks/**` and `/actuator/health` are exempt. The Postman collection's **Phase 5 -
+Auth** folder has a pre-request script that signs requests from the `merchantId` /
+`merchantSecret` environment variables. See [`docs/learning/04-hmac-auth.md`](docs/learning/04-hmac-auth.md).
+
+### Secret key
+
+Merchant signing secrets are stored encrypted (AES-256-GCM) with a key from
+`FLUXPAY_SECRET_KEY` (base64, 32 bytes). The gateway refuses to start if the key is unset,
+malformed, or cannot decrypt the seeded DEMO secret. The committed dev key in `.env.example`
+and `src/test/resources/application-test.yml` is **dev only — never reuse it in production.**
+
+To rotate the key:
+
+```bash
+openssl rand -base64 32                 # new key -> FLUXPAY_SECRET_KEY
+# re-encrypt each secret with the new key:
+FLUXPAY_SECRET_KEY=<new-key> ./mvnw -q -pl gateway exec:java \
+  -Dexec.mainClass=com.fluxpay.gateway.merchant.EncryptSecretTool \
+  -Dexec.args="demo-merchant demo-secret-change-me"
+# then add a new Flyway migration that UPDATEs merchants.secret with the printed v1:... value.
+```
 
 ## Learning notes
 

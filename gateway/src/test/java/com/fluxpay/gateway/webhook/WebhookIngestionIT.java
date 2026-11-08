@@ -59,8 +59,10 @@ class WebhookIngestionIT extends AbstractIntegrationTest {
     private String createPayment() throws Exception {
         String body = "{\"orderId\":\"ORD-%s\",\"amount\":%d,\"returnUrl\":\"https://m/r\"}"
                 .formatted(UUID.randomUUID(), AMOUNT);
-        var res = mvc.perform(post("/api/v1/payments").header("X-Merchant-Id", DEMO)
-                .contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isCreated()).andReturn();
+        var res = mvc.perform(post("/api/v1/payments")
+                .contentType(MediaType.APPLICATION_JSON).content(body)
+                .with(hmac(DEMO, DEMO_SECRET, clock.millis(), "idem-" + UUID.randomUUID())))
+                .andExpect(status().isCreated()).andReturn();
         return JsonPath.read(res.getResponse().getContentAsString(), "$.paymentId");
     }
 

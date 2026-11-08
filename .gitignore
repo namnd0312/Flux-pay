@@ -29,8 +29,6 @@ HELP.md
 # VS Code
 .vscode/
 .claude
-plans
-docs
 .env.example
 docker-compose.yml
 postman

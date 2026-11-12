@@ -1,10 +1,11 @@
 ---
 phase: 2
-title: "Early and Out-of-Order Webhooks with Pessimistic Lock"
-status: pending
+title: Early and Out-of-Order Webhooks with Pessimistic Lock
+status: completed
 priority: P1
-dependencies: [1]
-effort: "2.5 days"
+dependencies:
+  - 1
+effort: 2.5 days
 ---
 
 # Phase 2: Early and Out-of-Order Webhooks with Pessimistic Lock
@@ -142,24 +143,36 @@ Sender keeps counters `sent`, `retried`, `exhausted`, `rejected` (executor full)
 11. `./mvnw verify`. Postman folder. "Tự phá thử": change `reclaimRetryable` to select-then-update and run the concurrent redelivery test.
 
 ## Todo List
-- [ ] Fixture hook + reset discipline
-- [ ] Early-webhook demo recorded
-- [ ] Note 07, note 03 pointer
-- [ ] Retryable outcome, single-row fallback, guarded event updates
-- [ ] mock-provider retry / auto-pay / create delay / pool / counters
-- [ ] `EarlyWebhookIT`, `OutOfOrderWebhookIT` green
-- [ ] Pessimistic arm + `WebhookPessimisticLockIT`
-- [ ] Race IT green in both lock modes
-- [ ] `./mvnw verify` green
+- [x] Fixture hook + reset discipline
+- [x] Early-webhook demo recorded
+- [x] Note 07, note 03 pointer
+- [x] Retryable outcome, single-row fallback, guarded event updates
+- [x] mock-provider retry / auto-pay / create delay / pool / counters
+- [x] `EarlyWebhookIT`, `OutOfOrderWebhookIT` green
+- [x] Pessimistic arm + `WebhookPessimisticLockIT`
+- [x] Race IT green in both lock modes
+- [x] `./mvnw verify` green
 
 ## Success Criteria
-- [ ] Early webhook ends SUCCEEDED after redelivery; before/after recorded in note 07.
-- [ ] Fallback decides from one row; PENDING with matching ref is applied, never `UNKNOWN_PAYMENT`.
-- [ ] In-flight duplicate gets 503; `RETRYABLE` reclaim has exactly one winner and requires identical bytes.
-- [ ] Out-of-order pair never changes a terminal payment.
-- [ ] Lock timeout produces 503 + reclaimable event; timeout setting does not leak across pooled connections.
-- [ ] `WebhookVsCancelRaceIT` invariants hold in `optimistic` and `pessimistic` modes.
-- [ ] Full `./mvnw verify` green (gateway + mock-provider).
+- [x] Early webhook ends SUCCEEDED after redelivery; before/after recorded in note 07.
+- [x] Fallback decides from one row; PENDING with matching ref is applied, never `UNKNOWN_PAYMENT`.
+- [x] In-flight duplicate gets 503; `RETRYABLE` reclaim has exactly one winner and requires identical bytes.
+- [x] Out-of-order pair never changes a terminal payment.
+- [x] Lock timeout produces 503 + reclaimable event; timeout setting does not leak across pooled connections.
+- [x] `WebhookVsCancelRaceIT` invariants hold in `optimistic` and `pessimistic` modes.
+- [x] Full `./mvnw verify` green (gateway + mock-provider).
+
+## As-built notes (deviations)
+- Lock SQL on PostgreSQL / Hibernate 7.4 is `SELECT ... FOR NO KEY UPDATE` (verified from the SQL log), not `FOR UPDATE`.
+- Lock timeout set with `select set_config('lock_timeout', :ms, true)` as a repository native query (same connection guaranteed). The JPA hint experiment was skipped: an annotation value cannot come from config. Timeout surfaces inside Spring's `PessimisticLockingFailureException` hierarchy (verified by the timeout IT).
+- Payment-side logic split out of `WebhookIngestionService` into `WebhookPaymentApplier` + `WebhookOutcome` (file size, clearer boundary).
+- 503 body carries `code` plus a `reason` property (`PAYMENT_NOT_READY`, `LOCK_TIMEOUT`, `CONCURRENT_UPDATE`, `EVENT_IN_PROGRESS`).
+- Added `REJECTED MALFORMED_EVENT` for a signed event with a blank reference or unknown status (review finding).
+- Mock sender pool knobs are `mock.executor.threads` / `queue` (32 / 2000): core = max, because a separate max is never used with a large queue. `auto-pay` value validated at startup.
+- Optimistic-mode race IT is `payment/WebhookVsCancelOptimisticModeRaceIT`; in pessimistic mode the race IT asserts the webhook path had 0 version conflicts.
+- `WebhookPessimisticLockIT` uses one context with `lock-timeout=1500ms`.
+- Not done: end-to-end `docker compose` demo (running local stack uses db host port 5433 while the compose file maps 5432; not restarted without the user's say) and the Postman folder.
+- Review: `reports/from-code-reviewer-to-cook-phase-02-webhook-races-review-report.md` (no Critical/High; 4 Medium + L1-L4, L6 applied; L5, L7 left; L8 mock metrics exposure moves to phase 4).
 
 ## Risk Assessment
 Known limits, documented in note 07, owned by increment 3 (inbox consumer) and increment 4 (reconciliation):

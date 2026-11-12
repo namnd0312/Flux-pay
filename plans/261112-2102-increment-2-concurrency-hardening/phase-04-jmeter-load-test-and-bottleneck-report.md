@@ -28,6 +28,7 @@ Build a repeatable JMeter harness, prove with numbers that phases 1-3 hold under
 - A JMeter thread runs its samplers sequentially and Synchronizing Timer groups *threads*, not samplers; stock JMeter 5.6.3 has no parallel controller. The race scenario is therefore timing-based within one thread.
 - Expected non-failures must not count as errors: `409 IDEMPOTENCY_IN_PROGRESS`, `409 PAYMENT_ILLEGAL_TRANSITION` (race loser), replays.
 - Load generator, gateway, mock and Postgres share one laptop: absolute numbers are not capacity figures; only relative comparisons and the shape of saturation are valid. Say so in the report.
+- Carried from phase 2: the mock exposes only `health` over HTTP, so the load-test override must also expose `metrics` on the mock; counters appear only after their first increment (treat a missing series as 0). The local stack currently runs its db on host port 5433 while `docker-compose.yml` and the `increment-1` snapshot map 5432: settle the port with the user before any compose run.
 - JMeter property names / CLI flags and Tomcat metric names are **[UNVERIFIED]**: check with `jmeter --help` and the live `/actuator/metrics` list when authoring.
 
 ## Requirements

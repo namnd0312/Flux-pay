@@ -14,35 +14,49 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
 
 import com.fluxpay.mockprovider.config.MockProperties;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import tools.jackson.databind.ObjectMapper;
 
 /**
  * Sends a signed webhook (IPN) back to the gateway after a customer "pays". Runs on the
  * webhook executor so the pay endpoint can answer 202 at once, like a real provider's
- * out-of-band callback. Honours two knobs used by the phase-4 demos:
+ * out-of-band callback.
+ *
+ * <p>Delivery is <b>at least once</b>: the first delivery is repeated, with a growing
+ * pause, until the gateway answers 2xx or the attempts run out. Every attempt carries the
+ * same {@code eventId} and the exact same bytes; that is what lets the receiver recognise a
+ * redelivery. What is retried follows the usual provider rule:
  * <ul>
- *   <li>{@code delayMs}: wait before sending (simulates a late webhook);</li>
- *   <li>{@code duplicates}: send the same event (same eventId) extra times.</li>
+ *   <li>5xx, 429, or no answer at all (timeout, connection refused): the receiver may
+ *       succeed later, so retry;</li>
+ *   <li>any other 4xx (bad signature, unknown path, payload too large): the same request
+ *       can never succeed, so stop.</li>
  * </ul>
- * The exact JSON bytes are signed and sent verbatim, so the gateway verifies over the
- * same bytes. A failed send is logged, not retried (retry belongs to increment 2).
+ * Knobs: {@code delayMs} (late webhook) and {@code duplicates} (extra copies of an event
+ * that was already delivered; those are sent once each and not retried).
  */
 @Component
 public class WebhookSender {
 
     private static final Logger log = LoggerFactory.getLogger(WebhookSender.class);
 
+    private enum Attempt { DELIVERED, RETRY, GIVE_UP }
+
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
     private final MockProperties properties;
+    private final MeterRegistry meters;
 
-    public WebhookSender(RestClient.Builder builder, ObjectMapper objectMapper, MockProperties properties) {
+    public WebhookSender(RestClient.Builder builder, ObjectMapper objectMapper, MockProperties properties,
+            MeterRegistry meters) {
         this.restClient = builder.clone().baseUrl(properties.gatewayWebhookUrl()).build();
         this.objectMapper = objectMapper;
         this.properties = properties;
+        this.meters = meters;
     }
 
     @Async("webhookExecutor")
@@ -52,27 +66,65 @@ public class WebhookSender {
                 new WebhookPayload(eventId, providerRef, merchantRef, status, amount, Instant.now().toString()));
         String signature = hmacHex(properties.secret().getBytes(StandardCharsets.UTF_8), body);
 
-        if (properties.callback() != null && properties.callback().delayMs() > 0) {
-            sleep(properties.callback().delayMs());
+        sleep(properties.callback().delayMs());
+        if (!deliverWithRetry(eventId, body, signature)) {
+            return;
         }
-        int extra = properties.callback() == null ? 0 : properties.callback().duplicates();
-        for (int i = 0; i <= extra; i++) {
-            try {
-                String response = restClient.post()
-                        .uri("/webhooks/MOCK")
-                        .header("X-Mock-Signature", signature)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .body(body)
-                        .retrieve()
-                        .body(String.class);
-                log.info("Webhook {} send {}/{} -> {}", eventId, i + 1, extra + 1, response);
-            } catch (RestClientException ex) {
-                log.warn("Webhook {} send {}/{} failed: {}", eventId, i + 1, extra + 1, ex.getMessage());
+        for (int i = 1; i <= properties.callback().duplicates(); i++) {
+            Attempt copy = post(eventId, body, signature);
+            log.info("Webhook {} duplicate {}/{} -> {}", eventId, i, properties.callback().duplicates(), copy);
+        }
+    }
+
+    /** Returns true once the gateway has acknowledged the event with a 2xx. */
+    private boolean deliverWithRetry(String eventId, byte[] body, String signature) {
+        MockProperties.Retry retry = properties.callback().retry();
+        long backoff = retry.backoffMs();
+        for (int attempt = 1; attempt <= retry.maxAttempts(); attempt++) {
+            Attempt result = post(eventId, body, signature);
+            log.info("Webhook {} attempt {}/{} -> {}", eventId, attempt, retry.maxAttempts(), result);
+            if (result == Attempt.DELIVERED) {
+                return true;
             }
+            if (result == Attempt.GIVE_UP) {
+                return false;
+            }
+            if (attempt < retry.maxAttempts()) {
+                meters.counter("mock.webhook.retried").increment();
+                sleep(backoff);
+                backoff *= 2;
+            }
+        }
+        meters.counter("mock.webhook.exhausted").increment();
+        log.warn("Webhook {} not delivered after {} attempts", eventId, retry.maxAttempts());
+        return false;
+    }
+
+    private Attempt post(String eventId, byte[] body, String signature) {
+        meters.counter("mock.webhook.sent").increment();
+        try {
+            restClient.post()
+                    .uri("/webhooks/MOCK")
+                    .header("X-Mock-Signature", signature)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .toBodilessEntity();
+            return Attempt.DELIVERED;
+        } catch (RestClientResponseException ex) {
+            int status = ex.getStatusCode().value();
+            log.warn("Webhook {} answered {}", eventId, status);
+            return (status >= 500 || status == 429) ? Attempt.RETRY : Attempt.GIVE_UP;
+        } catch (RestClientException ex) {
+            log.warn("Webhook {} got no answer: {}", eventId, ex.getMessage());
+            return Attempt.RETRY;
         }
     }
 
     private static void sleep(long ms) {
+        if (ms <= 0) {
+            return;
+        }
         try {
             Thread.sleep(ms);
         } catch (InterruptedException ex) {

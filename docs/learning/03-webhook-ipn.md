@@ -29,6 +29,8 @@ Mỗi webhook có `eventId`. Ta `INSERT ... ON CONFLICT (provider_code, event_id
 ### 3.2 Luôn 200 cho từ chối nghiệp vụ
 Sau khi chữ ký hợp lệ, response **luôn 200** với thân `{received, duplicate, applied, rejectReason?}`. Từ chối nghiệp vụ (UNKNOWN_PAYMENT, REF_MISMATCH, AMOUNT_MISMATCH, ILLEGAL_TRANSITION) được **lưu** vào dòng event với `processing_status=REJECTED` + `reject_reason`, **không** trả 4xx/5xx. Chỉ trả lỗi HTTP cho sự cố hạ tầng, **trước khi ghi gì**: 401 (chữ ký sai), 404 (provider code lạ), 413 (body quá 64KB). Lý do: nếu trả 4xx cho lỗi nghiệp vụ, provider retry vô ích một thứ **không bao giờ** hợp lệ.
 
+> **Cập nhật increment 2:** "luôn 200" chỉ đúng cho kết quả **chung cuộc**. Có những từ chối chỉ là *chưa được lúc này* (payment chưa sẵn sàng, dòng đang bị khóa, lần giao trước còn đang chạy) — với chúng gateway trả **503** để provider gửi lại. Xem [note 07](07-webhook-races-and-pessimistic-lock.md).
+
 ### 3.3 Chữ ký trên raw bytes
 Header `X-Mock-Signature = lowercasehex(HMAC-SHA256(secret, rawBodyBytes))`. Gateway verify trên **đúng chuỗi byte thô** nhận được, nên controller đọc `byte[]`, **không** `@RequestBody DTO` — vì nếu để Spring parse JSON thành object rồi serialize lại, byte đổi và chữ ký vỡ. So sánh bằng `MessageDigest.isEqual` (constant-time), chống timing attack. `HmacSigner` (byte-based) ra đời ở đây, phase 5 tái dùng cho auth merchant.
 

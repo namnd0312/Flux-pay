@@ -1,5 +1,6 @@
 package com.fluxpay.mockprovider.session;
 
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -7,10 +8,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+
+import com.fluxpay.mockprovider.config.MockProperties;
+import com.fluxpay.mockprovider.webhook.WebhookSender;
 
 import com.jayway.jsonpath.JsonPath;
 
@@ -21,6 +28,16 @@ class SessionControllerTest {
 
     @Autowired
     MockMvc mvc;
+
+    /** The controller can trigger a webhook (auto-pay); it is off by default and never called here. */
+    @MockitoBean
+    WebhookSender sender;
+
+    /** The web slice does not load AsyncConfig, so bind the mock's properties here. */
+    @TestConfiguration
+    @EnableConfigurationProperties(MockProperties.class)
+    static class Props {
+    }
 
     @Test
     void createThenGet() throws Exception {
@@ -36,6 +53,7 @@ class SessionControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.merchantRef").value("abc"))
                 .andExpect(jsonPath("$.status").value("NEW"));
+        verifyNoInteractions(sender);
     }
 
     @Test

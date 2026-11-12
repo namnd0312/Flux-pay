@@ -24,6 +24,22 @@ mock:
   # Base of the pay URL handed back to the gateway/customer.
   public-base-url: ${MOCK_PUBLIC_BASE_URL:http://localhost:8081}
   callback:
-    # Knobs for the phase-4 demos: delay a webhook, or send it more than once (same eventId).
+    # Wait before sending a webhook (a late webhook).
     delay-ms: ${MOCK_CALLBACK_DELAY_MS:0}
+    # Extra copies of an already delivered event (same eventId).
     duplicates: ${MOCK_CALLBACK_DUPLICATES:0}
+    # NONE, or SUCCESS / FAILED: pay the session the moment it is created, so the webhook can
+    # reach the gateway before the gateway has finished its own create call (early webhook).
+    auto-pay: ${MOCK_CALLBACK_AUTO_PAY:NONE}
+    retry:
+      # Total sends of the first delivery. Retried on 5xx / 429 / no answer, never on other 4xx.
+      max-attempts: ${MOCK_CALLBACK_RETRY_MAX_ATTEMPTS:6}
+      # Pause before the 2nd attempt, doubled each time: 0.5+1+2+4+8 = 15.5s in total.
+      backoff-ms: ${MOCK_CALLBACK_RETRY_BACKOFF_MS:500}
+  create:
+    # Hold the create-session response (a slow provider).
+    delay-ms: ${MOCK_CREATE_DELAY_MS:0}
+  executor:
+    # Webhook sender pool. Each in-flight delivery (including its backoff sleeps) uses a thread.
+    threads: ${MOCK_EXECUTOR_THREADS:32}
+    queue: ${MOCK_EXECUTOR_QUEUE:2000}

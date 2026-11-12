@@ -1,25 +1,22 @@
 package com.fluxpay.gateway.webhook;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import com.fluxpay.gateway.payment.IllegalPaymentTransitionException;
-import com.fluxpay.gateway.payment.OptimisticRetry;
-import com.fluxpay.gateway.payment.Payment;
-import com.fluxpay.gateway.payment.PaymentRepository;
-import com.fluxpay.gateway.payment.PaymentStateMachine;
-import com.fluxpay.gateway.payment.PaymentStatus;
-import com.fluxpay.gateway.payment.TransitionSource;
 import com.fluxpay.gateway.provider.PaymentProvider;
 import com.fluxpay.gateway.provider.ProviderRegistry;
 import com.fluxpay.gateway.provider.ProviderWebhookEvent;
 import com.fluxpay.gateway.provider.UnknownProviderException;
+import com.fluxpay.gateway.webhook.WebhookEventStore.Existing;
 
 /**
  * Ingests one inbound webhook. Deliberately NOT {@code @Transactional}: it runs separate
@@ -29,33 +26,34 @@ import com.fluxpay.gateway.provider.UnknownProviderException;
  * rollback-only). The steps:
  * <ol>
  *   <li>verify signature (no tx) -> 401 if bad; parse;</li>
- *   <li>insert the event (dedup via ON CONFLICT); a duplicate just bumps the counter;</li>
- *   <li>validate against the payment and apply the transition in its own tx;</li>
- *   <li>mark the event APPLIED or REJECTED.</li>
+ *   <li>claim the event: insert it (first delivery), or take back a RETRYABLE one
+ *       (redelivery), or recognise a duplicate;</li>
+ *   <li>validate against the payment and apply the transition ({@link WebhookPaymentApplier});</li>
+ *   <li>record the outcome on the event row: APPLIED, REJECTED or RETRYABLE.</li>
  * </ol>
- * After a valid signature the HTTP response is always 200, so a real provider never
- * retries a business rejection.
+ *
+ * <p>A provider delivers at least once and decides whether to retry from the HTTP status
+ * alone, so each outcome maps to one of two answers (see {@link WebhookResult}): 200 for
+ * anything final, 503 for anything that may succeed on a later delivery. A RETRYABLE row
+ * is the ledger side of that 503: it keeps the dedup key from swallowing the redelivery.
  */
 @Service
 public class WebhookIngestionService {
 
+    private static final Logger log = LoggerFactory.getLogger(WebhookIngestionService.class);
+
     private final ProviderRegistry providers;
-    private final PaymentRepository payments;
-    private final PaymentStateMachine stateMachine;
+    private final WebhookPaymentApplier applier;
     private final WebhookEventStore events;
     private final TransactionTemplate tx;
-    private final OptimisticRetry retry;
     private final Clock clock;
 
-    public WebhookIngestionService(ProviderRegistry providers, PaymentRepository payments,
-            PaymentStateMachine stateMachine, WebhookEventStore events, PlatformTransactionManager txManager,
-            OptimisticRetry retry, Clock clock) {
+    public WebhookIngestionService(ProviderRegistry providers, WebhookPaymentApplier applier,
+            WebhookEventStore events, PlatformTransactionManager txManager, Clock clock) {
         this.providers = providers;
-        this.payments = payments;
-        this.stateMachine = stateMachine;
+        this.applier = applier;
         this.events = events;
         this.tx = new TransactionTemplate(txManager);
-        this.retry = retry;
         this.clock = clock;
     }
 
@@ -68,34 +66,99 @@ public class WebhookIngestionService {
         }
         ProviderWebhookEvent event = provider.parseWebhook(rawBody);
         var now = clock.instant();
-        String rawString = new String(rawBody, java.nio.charset.StandardCharsets.UTF_8);
+        String rawString = new String(rawBody, StandardCharsets.UTF_8);
 
-        // 2) tx A: insert or detect duplicate. The unique constraint is the only arbiter.
-        Optional<UUID> rowId = tx.execute(s -> events.insertNew(providerCode, event.eventId(), rawString, now));
-        if (rowId.isEmpty()) {
-            tx.execute(s -> {
-                events.incrementDuplicate(providerCode, event.eventId());
-                return null;
-            });
-            return WebhookResult.asDuplicate();
+        // 2) claim the event. The unique constraint (insert) and the conditional update
+        //    (reclaim) are the only arbiters; no exists-check in application code.
+        Optional<UUID> claimed = tx.execute(s -> events.insertNew(providerCode, event.eventId(), rawString, now));
+        if (claimed.isEmpty()) {
+            claimed = tx.execute(s -> events.reclaimRetryable(providerCode, event.eventId(), rawString));
         }
-        UUID id = rowId.get();
+        if (claimed.isEmpty()) {
+            return answerForKnownEvent(providerCode, event.eventId(), rawString);
+        }
+        UUID id = claimed.get();
 
-        // 3) validate against the payment; apply the transition inside its own tx.
-        Validation v = validateAndApply(providerCode, event);
+        // 3) validate against the payment and apply the transition.
+        WebhookOutcome outcome;
+        try {
+            outcome = applier.apply(providerCode, event);
+        } catch (RuntimeException ex) {
+            // Unexpected failure: do not leave the row RECEIVED, or every redelivery would be
+            // told "in progress" for an attempt that is already dead. Logged here because the
+            // generic 500 handler prints no stack trace.
+            log.error("Webhook event {} ({}) failed unexpectedly", event.eventId(), providerCode, ex);
+            releaseForRedelivery(id);
+            throw ex; // -> 500, the provider retries
+        }
 
-        // 4) tx C: record the outcome on the event row.
-        UUID paymentId = v.paymentId();
+        // 4) record the outcome on the event row.
         tx.execute(s -> {
-            if (v.rejectReason() == null) {
-                events.markApplied(id, paymentId, now);
+            if (outcome.isApplied()) {
+                events.markApplied(id, outcome.paymentId(), now);
+            } else if (outcome.isRetryLater()) {
+                events.markRetryable(id, outcome.paymentId(), outcome.retryReason(), now);
             } else {
-                events.markRejected(id, paymentId, v.rejectReason(), now);
+                events.markRejected(id, outcome.paymentId(), outcome.rejectReason(), now);
             }
             return null;
         });
 
-        return v.rejectReason() == null ? WebhookResult.asApplied() : WebhookResult.asRejected(v.rejectReason());
+        if (outcome.isApplied()) {
+            return WebhookResult.asApplied();
+        }
+        return outcome.isRetryLater()
+                ? WebhookResult.asRetryLater(outcome.retryReason())
+                : WebhookResult.asRejected(outcome.rejectReason());
+    }
+
+    /**
+     * The event id is already in the ledger and could not be reclaimed. What we answer
+     * depends on what the earlier delivery has (or has not yet) concluded:
+     * <ul>
+     *   <li>APPLIED / REJECTED: final. 200 duplicate, the provider can stop.</li>
+     *   <li>RETRYABLE but with different bytes: not the same event content; acknowledge
+     *       and never process it.</li>
+     *   <li>RECEIVED (another delivery is running right now), or anything else: its fate is
+     *       unknown. 200 here would stop the provider while that delivery may still end
+     *       RETRYABLE, so answer "retry later".</li>
+     * </ul>
+     */
+    private WebhookResult answerForKnownEvent(String providerCode, String eventId, String rawString) {
+        Optional<Existing> existing = tx.execute(s -> events.findExisting(providerCode, eventId, rawString));
+        if (existing.isEmpty()) {
+            return WebhookResult.asRetryLater("EVENT_IN_PROGRESS");
+        }
+        String status = existing.get().processingStatus();
+        if ("APPLIED".equals(status) || "REJECTED".equals(status)) {
+            countDuplicate(providerCode, eventId);
+            return WebhookResult.asDuplicate();
+        }
+        if ("RETRYABLE".equals(status) && !existing.get().sameBody()) {
+            countDuplicate(providerCode, eventId);
+            return WebhookResult.asDuplicateRejected("EVENT_BODY_MISMATCH");
+        }
+        return WebhookResult.asRetryLater("EVENT_IN_PROGRESS");
+    }
+
+    private void countDuplicate(String providerCode, String eventId) {
+        tx.execute(s -> {
+            events.incrementDuplicate(providerCode, eventId);
+            return null;
+        });
+    }
+
+    private void releaseForRedelivery(UUID id) {
+        try {
+            tx.execute(s -> {
+                events.markRetryable(id, null, "INTERNAL_ERROR", clock.instant());
+                return null;
+            });
+        } catch (RuntimeException ex) {
+            // Best effort (e.g. the database itself is the failure). The row stays RECEIVED and
+            // redeliveries get 503 until the provider gives up; the original error is rethrown.
+            log.warn("Could not mark webhook event {} retryable after a failure: {}", id, ex.getMessage());
+        }
     }
 
     private PaymentProvider resolve(String providerCode) {
@@ -104,41 +167,5 @@ public class WebhookIngestionService {
         } catch (UnknownProviderException ex) {
             throw new WebhookUnknownProviderException(providerCode); // 404 for the webhook path
         }
-    }
-
-    /**
-     * Reads the referenced payment and validates it (existence, ref, amount), then applies
-     * the status transition in tx B. An illegal transition rolls back only tx B and is
-     * reported as a rejection, never overwriting a terminal payment.
-     */
-    private Validation validateAndApply(String providerCode, ProviderWebhookEvent event) {
-        Optional<Payment> found = payments.findByProviderCodeAndProviderRef(providerCode, event.providerRef());
-        if (found.isEmpty()) {
-            return new Validation(null, "UNKNOWN_PAYMENT");
-        }
-        Payment payment = found.get();
-        UUID paymentId = payment.getId();
-        if (!paymentId.toString().equals(event.merchantRef())) {
-            return new Validation(paymentId, "REF_MISMATCH");
-        }
-        if (payment.getAmount() != event.amount()) {
-            return new Validation(paymentId, "AMOUNT_MISMATCH");
-        }
-        PaymentStatus target = "SUCCESS".equals(event.status()) ? PaymentStatus.SUCCEEDED : PaymentStatus.FAILED;
-        try {
-            // A concurrent cancel or sweep may commit first; the retry re-reads, and the state
-            // machine then rejects the move on the now-terminal payment (caught below).
-            retry.execute("webhook", tx, () -> {
-                Payment p = payments.loadForSweep(paymentId).orElseThrow();
-                stateMachine.transition(p, target, "PROVIDER_WEBHOOK", TransitionSource.PROVIDER);
-                return null;
-            });
-            return new Validation(paymentId, null);
-        } catch (IllegalPaymentTransitionException ex) {
-            return new Validation(paymentId, "ILLEGAL_TRANSITION");
-        }
-    }
-
-    private record Validation(UUID paymentId, String rejectReason) {
     }
 }

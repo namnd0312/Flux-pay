@@ -52,6 +52,13 @@ fluxpay:
       base-url: ${FLUXPAY_PROVIDERS_MOCK_BASE_URL:http://localhost:8081}
       # Shared HMAC key; must equal mock.secret on the mock-provider. Dev default, override in prod.
       webhook-secret: ${FLUXPAY_PROVIDERS_MOCK_WEBHOOK_SECRET:mock-webhook-secret-dev}
+  webhook:
+    # How the webhook path guards its payment update against a concurrent cancel/sweep:
+    # "pessimistic" = locking read, SELECT ... FOR NO KEY UPDATE (writers queue on the row lock),
+    # "optimistic"  = no lock, @Version conflict detected at commit and retried.
+    lock-mode: ${FLUXPAY_WEBHOOK_LOCK_MODE:pessimistic}
+    # Pessimistic mode only: longest wait for the row lock before answering 503 (retry later).
+    lock-timeout: 2s
   payment:
     # How long a PENDING payment stays payable before the sweeper expires it. Demo/env may override to 1m.
     expiry: 15m

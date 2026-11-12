@@ -2,6 +2,9 @@ package com.fluxpay.gateway;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.springframework.boot.test.context.TestConfiguration;
@@ -36,6 +39,7 @@ public class CountingFakeProvider implements PaymentProvider {
     private final HmacSigner signer = new HmacSigner();
     private final ObjectMapper objectMapper = JsonMapper.builder().build();
     private volatile boolean failTransport = false;
+    private volatile CreateGate gate;
 
     @Override
     public String code() {
@@ -48,6 +52,10 @@ public class CountingFakeProvider implements PaymentProvider {
             throw new IllegalStateException("Provider call must run outside a DB transaction");
         }
         calls.incrementAndGet();
+        CreateGate parked = gate;
+        if (parked != null && parked.tryEnter(request.merchantRef())) {
+            parked.awaitRelease();
+        }
         if (failTransport) {
             throw new ProviderException("PROVIDER_UNAVAILABLE", "Simulated provider failure", null);
         }
@@ -79,9 +87,72 @@ public class CountingFakeProvider implements PaymentProvider {
         this.failTransport = fail;
     }
 
+    /**
+     * Parks the next {@code createPayment} call inside the provider until the returned gate
+     * is released. This freezes the create flow in the window that matters for the
+     * early-webhook race: tx1 has committed the CREATED row, the provider "has accepted",
+     * but tx2 (provider ref + PENDING) has not run yet.
+     */
+    public CreateGate blockNextCreate() {
+        CreateGate created = new CreateGate();
+        this.gate = created;
+        return created;
+    }
+
     public void reset() {
         this.calls.set(0);
         this.failTransport = false;
+        CreateGate pending = this.gate;
+        this.gate = null;
+        if (pending != null) {
+            pending.release(); // never leave a create parked for the next test class
+        }
+    }
+
+    /** Handle on one parked create call. */
+    public static final class CreateGate {
+        private final CountDownLatch entered = new CountDownLatch(1);
+        private final CountDownLatch released = new CountDownLatch(1);
+        private volatile UUID merchantRef;
+
+        private synchronized boolean tryEnter(UUID ref) {
+            if (merchantRef != null) {
+                return false; // only the first create is parked
+            }
+            merchantRef = ref;
+            entered.countDown();
+            return true;
+        }
+
+        private void awaitRelease() {
+            await(released, "release of the parked create");
+        }
+
+        /** Blocks until the create call is inside the provider; returns the gateway payment id. */
+        public UUID awaitEntered() {
+            await(entered, "the create call to reach the provider");
+            return merchantRef;
+        }
+
+        /** The provider reference this fake will return for the parked payment. */
+        public String providerRef() {
+            return "mp_fake_" + merchantRef;
+        }
+
+        public void release() {
+            released.countDown();
+        }
+
+        private static void await(CountDownLatch latch, String what) {
+            try {
+                if (!latch.await(15, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("Timed out waiting for " + what);
+                }
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(ex);
+            }
+        }
     }
 
     @TestConfiguration(proxyBeanMethods = false)

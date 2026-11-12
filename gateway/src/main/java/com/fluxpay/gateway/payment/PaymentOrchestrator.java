@@ -38,6 +38,11 @@ import com.fluxpay.gateway.provider.ProviderRegistry;
  * failure compensates to FAILED with an internal reason (500). A JVM death between tx1 and
  * tx2 leaves a CREATED row, which the sweeper later fails via {@link #failAbandonedCreated}.
  *
+ * <p>Every block that changes an existing payment runs through {@link OptimisticRetry}: two
+ * writers can race on one row (webhook vs cancel vs sweeper), and the loser must re-read
+ * and try again rather than fail. The sweeper is the exception: it already skips a row that
+ * fails and re-evaluates it on the next sweep.
+ *
  * <p>Two templates are built from the transaction manager: {@code tx} (default) for the
  * create/cancel steps, and {@code newTx} (REQUIRES_NEW) so the sweeper gives each row an
  * independent transaction. Building them here avoids mutating a shared bean at runtime.
@@ -53,13 +58,14 @@ public class PaymentOrchestrator {
     private final ProviderRegistry providers;
     private final TransactionTemplate tx;
     private final TransactionTemplate newTx;
+    private final OptimisticRetry retry;
     private final Clock clock;
     private final Duration expiry;
     private final Duration createdTimeout;
 
     public PaymentOrchestrator(PaymentRepository payments, PaymentTransitionRepository transitions,
             PaymentStateMachine stateMachine, ProviderRegistry providers, PlatformTransactionManager txManager,
-            Clock clock, @Value("${fluxpay.payment.expiry}") Duration expiry,
+            OptimisticRetry retry, Clock clock, @Value("${fluxpay.payment.expiry}") Duration expiry,
             @Value("${fluxpay.payment.created-timeout}") Duration createdTimeout) {
         this.payments = payments;
         this.transitions = transitions;
@@ -68,6 +74,7 @@ public class PaymentOrchestrator {
         this.tx = new TransactionTemplate(txManager);
         this.newTx = new TransactionTemplate(txManager);
         this.newTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.retry = retry;
         this.clock = clock;
         this.expiry = expiry;
         this.createdTimeout = createdTimeout;
@@ -104,7 +111,8 @@ public class PaymentOrchestrator {
             throw ex; // -> 500
         }
 
-        return tx.execute(status -> { // tx2: record provider result, move to PENDING
+        // tx2: record provider result, move to PENDING. Retried if it loses a version race.
+        return retry.execute("create", tx, () -> {
             var p = payments.findByIdAndMerchantId(id, merchantId).orElseThrow(() -> new PaymentNotFoundException(id));
             p.setProviderCode(code);
             p.setProviderRef(result.providerRef());
@@ -115,7 +123,7 @@ public class PaymentOrchestrator {
     }
 
     private void compensateToFailed(UUID id, UUID merchantId, String reasonCode) {
-        tx.execute(status -> {
+        retry.execute("compensate", tx, () -> {
             var p = payments.findByIdAndMerchantId(id, merchantId)
                     .orElseThrow(() -> new PaymentNotFoundException(id));
             stateMachine.transition(p, PaymentStatus.FAILED, reasonCode, TransitionSource.SYSTEM);
@@ -133,7 +141,9 @@ public class PaymentOrchestrator {
     }
 
     public Payment cancel(UUID id, UUID merchantId) {
-        return tx.execute(status -> {
+        // Losing to a concurrent webhook or sweeper is retried; the re-read then sees a terminal
+        // payment and the state machine answers 409 instead of the lock answering 500.
+        return retry.execute("cancel", tx, () -> {
             var payment = payments.findByIdAndMerchantId(id, merchantId)
                     .orElseThrow(() -> new PaymentNotFoundException(id));
             stateMachine.transition(payment, PaymentStatus.CANCELLED, "MERCHANT_CANCEL", TransitionSource.MERCHANT);

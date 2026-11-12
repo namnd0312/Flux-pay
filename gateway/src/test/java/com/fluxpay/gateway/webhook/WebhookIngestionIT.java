@@ -18,8 +18,6 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.fluxpay.gateway.AbstractIntegrationTest;
-import com.fluxpay.gateway.CountingFakeProvider;
-import com.fluxpay.gateway.common.HmacSigner;
 import com.fluxpay.gateway.payment.PaymentOrchestrator;
 import com.jayway.jsonpath.JsonPath;
 
@@ -39,9 +37,6 @@ class WebhookIngestionIT extends AbstractIntegrationTest {
 
     @Autowired
     JdbcClient jdbc;
-
-    @Autowired
-    HmacSigner signer;
 
     @Autowired
     com.fluxpay.gateway.MutableClock clock;
@@ -76,19 +71,12 @@ class WebhookIngestionIT extends AbstractIntegrationTest {
                 .query(String.class).single();
     }
 
-    private String webhookJson(String eventId, String providerRef, String merchantRef, String st, long amount) {
-        return ("{\"eventId\":\"%s\",\"providerRef\":\"%s\",\"merchantRef\":\"%s\","
-                + "\"status\":\"%s\",\"amount\":%d,\"occurredAt\":\"2026-01-01T00:00:00Z\"}")
-                .formatted(eventId, providerRef, merchantRef, st, amount);
-    }
-
     private org.springframework.test.web.servlet.ResultActions send(String json, boolean validSig) throws Exception {
-        byte[] body = json.getBytes(StandardCharsets.UTF_8);
-        String sig = validSig
-                ? signer.hex(CountingFakeProvider.TEST_WEBHOOK_SECRET.getBytes(StandardCharsets.UTF_8), body)
-                : "deadbeef";
-        return mvc.perform(post("/webhooks/MOCK").header("X-Mock-Signature", sig)
-                .contentType(MediaType.APPLICATION_JSON).content(body));
+        if (validSig) {
+            return mvc.perform(signedWebhook(json));
+        }
+        return mvc.perform(post("/webhooks/MOCK").header("X-Mock-Signature", "deadbeef")
+                .contentType(MediaType.APPLICATION_JSON).content(json.getBytes(StandardCharsets.UTF_8)));
     }
 
     private int eventCount(String eventId) {

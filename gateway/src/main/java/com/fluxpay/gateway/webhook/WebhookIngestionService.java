@@ -10,6 +10,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import com.fluxpay.gateway.payment.IllegalPaymentTransitionException;
+import com.fluxpay.gateway.payment.OptimisticRetry;
 import com.fluxpay.gateway.payment.Payment;
 import com.fluxpay.gateway.payment.PaymentRepository;
 import com.fluxpay.gateway.payment.PaymentStateMachine;
@@ -43,16 +44,18 @@ public class WebhookIngestionService {
     private final PaymentStateMachine stateMachine;
     private final WebhookEventStore events;
     private final TransactionTemplate tx;
+    private final OptimisticRetry retry;
     private final Clock clock;
 
     public WebhookIngestionService(ProviderRegistry providers, PaymentRepository payments,
             PaymentStateMachine stateMachine, WebhookEventStore events, PlatformTransactionManager txManager,
-            Clock clock) {
+            OptimisticRetry retry, Clock clock) {
         this.providers = providers;
         this.payments = payments;
         this.stateMachine = stateMachine;
         this.events = events;
         this.tx = new TransactionTemplate(txManager);
+        this.retry = retry;
         this.clock = clock;
     }
 
@@ -123,7 +126,9 @@ public class WebhookIngestionService {
         }
         PaymentStatus target = "SUCCESS".equals(event.status()) ? PaymentStatus.SUCCEEDED : PaymentStatus.FAILED;
         try {
-            tx.execute(s -> {
+            // A concurrent cancel or sweep may commit first; the retry re-reads, and the state
+            // machine then rejects the move on the now-terminal payment (caught below).
+            retry.execute("webhook", tx, () -> {
                 Payment p = payments.loadForSweep(paymentId).orElseThrow();
                 stateMachine.transition(p, target, "PROVIDER_WEBHOOK", TransitionSource.PROVIDER);
                 return null;

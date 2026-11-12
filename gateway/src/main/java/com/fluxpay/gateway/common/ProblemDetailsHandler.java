@@ -1,5 +1,6 @@
 package com.fluxpay.gateway.common;
 
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -46,6 +47,17 @@ public class ProblemDetailsHandler {
     @ExceptionHandler(IllegalPaymentTransitionException.class)
     public ProblemDetail onIllegalTransition(IllegalPaymentTransitionException ex) {
         return writer.build(HttpStatus.CONFLICT, "PAYMENT_ILLEGAL_TRANSITION", ex.getMessage());
+    }
+
+    /**
+     * A payment write lost the optimistic-lock race on every retry. Not expected in practice
+     * (see OptimisticRetry for the bound); 503 tells the caller nothing was changed and the
+     * request may be sent again. 503 is not a stored idempotency outcome, so the key is released.
+     */
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    public ProblemDetail onConcurrentUpdate(OptimisticLockingFailureException ex) {
+        return writer.build(HttpStatus.SERVICE_UNAVAILABLE, "CONCURRENT_UPDATE",
+                "The payment was changed by another request at the same time. Please retry.");
     }
 
     /** Requested provider code has no adapter. */

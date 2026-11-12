@@ -7,6 +7,9 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
@@ -69,5 +72,24 @@ public abstract class AbstractIntegrationTest {
             request.addHeader("X-Signature", SIGNER.hex(secret.getBytes(StandardCharsets.UTF_8), canonical));
             return request;
         };
+    }
+
+    /** Wire JSON of a MOCK provider webhook, in the shape {@link CountingFakeProvider} parses. */
+    protected static String webhookJson(String eventId, String providerRef, String merchantRef, String status,
+            long amount) {
+        return ("{\"eventId\":\"%s\",\"providerRef\":\"%s\",\"merchantRef\":\"%s\","
+                + "\"status\":\"%s\",\"amount\":%d,\"occurredAt\":\"2026-01-01T00:00:00Z\"}")
+                .formatted(eventId, providerRef, merchantRef, status, amount);
+    }
+
+    /**
+     * A {@code POST /webhooks/MOCK} request signed the way the provider signs it: HMAC over
+     * the exact body bytes with the test webhook secret, in {@code X-Mock-Signature}.
+     */
+    protected static MockHttpServletRequestBuilder signedWebhook(String json) {
+        byte[] body = json.getBytes(StandardCharsets.UTF_8);
+        String signature = SIGNER.hex(CountingFakeProvider.TEST_WEBHOOK_SECRET.getBytes(StandardCharsets.UTF_8), body);
+        return MockMvcRequestBuilders.post("/webhooks/MOCK").header("X-Mock-Signature", signature)
+                .contentType(MediaType.APPLICATION_JSON).content(body);
     }
 }

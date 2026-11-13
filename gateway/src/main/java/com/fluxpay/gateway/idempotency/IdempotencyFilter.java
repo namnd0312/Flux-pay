@@ -7,6 +7,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.Set;
 import java.util.UUID;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -36,6 +38,8 @@ import jakarta.servlet.http.HttpServletResponse;
  * can retry with it.
  */
 public class IdempotencyFilter extends OncePerRequestFilter {
+
+    private static final Logger log = LoggerFactory.getLogger(IdempotencyFilter.class);
 
     static final String HEADER_KEY = "Idempotency-Key";
     static final String HEADER_REPLAYED = "Idempotency-Replayed";
@@ -81,29 +85,52 @@ public class IdempotencyFilter extends OncePerRequestFilter {
             case MISMATCH -> reject(response, HttpStatus.UNPROCESSABLE_ENTITY, "IDEMPOTENCY_KEY_REUSED",
                     "This Idempotency-Key was already used with a different request body.");
             case REPLAY -> replay(response, outcome.responseStatus(), outcome.responseBody());
-            case NEW -> runAndStore(request, response, chain, ctx.merchantId(), key);
+            case NEW -> runAndStore(request, response, chain, ctx.merchantId(), key, outcome.leaseEpoch());
         }
     }
 
     private void runAndStore(HttpServletRequest request, HttpServletResponse response, FilterChain chain,
-            UUID merchantId, String key) throws ServletException, IOException {
+            UUID merchantId, String key, long leaseEpoch) throws ServletException, IOException {
         ContentCachingResponseWrapper wrapper = new ContentCachingResponseWrapper(response);
-        boolean stored = false;
+        boolean settled = false;
         try {
             chain.doFilter(request, wrapper);
             int status = wrapper.getStatus();
             if (STORABLE_STATUSES.contains(status)) {
                 String body = new String(wrapper.getContentAsByteArray(), StandardCharsets.UTF_8);
-                idempotency.complete(merchantId, key, status, body);
-                stored = true;
+                // From here the key is not abandoned any more, even if storing fails: the
+                // request has succeeded, and releasing the key would invite a second run. If
+                // complete() throws, the key stays leased until the lease expires.
+                settled = true;
+                if (!idempotency.complete(merchantId, key, leaseEpoch, status, body)) {
+                    leaseLost(merchantId, key, leaseEpoch);
+                }
             }
         } finally {
             // A non-storable status (500/503) or a thrown exception leaves the key reclaimable.
-            if (!stored) {
-                idempotency.abandon(merchantId, key);
+            try {
+                if (!settled && !idempotency.abandon(merchantId, key, leaseEpoch)) {
+                    leaseLost(merchantId, key, leaseEpoch);
+                }
+            } catch (RuntimeException ex) {
+                // Releasing the key failed (e.g. the database is down). Do not let that replace
+                // the real outcome: the key simply stays leased until the lease expires.
+                log.warn("Could not release idempotency key {} for merchant {}: {}", key, merchantId,
+                        ex.getMessage());
+            } finally {
+                wrapper.copyBodyToResponse();
             }
-            wrapper.copyBodyToResponse();
         }
+    }
+
+    /**
+     * This request ran past its lease and no longer owns the key (another request took it
+     * over, or the row is gone). Its fenced write changed nothing, which is the point: the stored outcome belongs to the current
+     * owner. This request's own client still gets the response computed for it.
+     */
+    private static void leaseLost(UUID merchantId, String key, long leaseEpoch) {
+        log.warn("Idempotency lease lost: merchant={} key={} epoch={} finished after it stopped owning the key; "
+                + "its outcome was not stored", merchantId, key, leaseEpoch);
     }
 
     private void replay(HttpServletResponse response, int status, String body) throws IOException {

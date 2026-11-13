@@ -1,10 +1,10 @@
 ---
 phase: 3
-title: "Idempotency Lease Fencing"
-status: pending
+title: Idempotency Lease Fencing
+status: completed
 priority: P2
 dependencies: []
-effort: "1 day"
+effort: 1 day
 ---
 
 # Phase 3: Idempotency Lease Fencing
@@ -79,18 +79,24 @@ Signature change, all callers (verified by grep):
 8. `./mvnw verify`. "Tự phá thử": drop `and lease_epoch = :e` from `complete`, rerun `LeaseFencingIT`.
 
 ## Todo List
-- [ ] Demo recorded (overwrite + delete)
-- [ ] Note 08, note 05 pointer
-- [ ] V8 migration
-- [ ] Store / outcome / service / filter
-- [ ] `LeaseFencingIT` + filter-level IT green
-- [ ] `./mvnw verify` green
+- [x] Demo recorded (overwrite + delete)
+- [x] Note 08, note 05 pointer
+- [x] V8 migration
+- [x] Store / outcome / service / filter
+- [x] `LeaseFencingIT` + filter-level IT green
+- [x] `./mvnw verify` green
 
 ## Success Criteria
-- [ ] Zombie `complete` and `abandon` affect 0 rows, including after delete-then-re-claim; stored response is the current owner's.
-- [ ] `ConcurrentCreateIT` still green (1 payment, 1 provider call).
-- [ ] Before/after recorded in note 08.
-- [ ] Full `./mvnw verify` green.
+- [x] Zombie `complete` and `abandon` affect 0 rows, including after delete-then-re-claim; stored response is the current owner's.
+- [x] `ConcurrentCreateIT` still green (1 payment, 1 provider call).
+- [x] Before/after recorded in note 08.
+- [x] Full `./mvnw verify` green.
+
+## As-built notes
+- Demo before the fix: late `complete(502)` replaced the stored 201; late `abandon` deleted the completed key (next `begin` = NEW).
+- `IdempotencyFilter` uses a `settled` flag so a refused `complete` is not followed by a pointless `abandon`; lost lease logs one WARN.
+- Filter-level IT asserts the WARN via `OutputCaptureExtension`.
+- Review (`reports/from-code-reviewer-to-cook-phase-03-lease-fencing-review-report.md`, no Critical/High): added the "zombie writes while the new owner is still IN_PROGRESS" test; sequence `OWNED BY` the column; `abandon` failing in `finally` no longer masks the response (pre-existing bug); a failing `complete` now leaves the key leased until expiry instead of releasing it (intended, documented in note 08).
 
 ## Risk Assessment
 <!-- Updated: Validation Session 1 - zombie returns its own response; 409 replay accepted and documented -->

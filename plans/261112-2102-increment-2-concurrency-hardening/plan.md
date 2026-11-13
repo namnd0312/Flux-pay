@@ -63,7 +63,7 @@ Kafka / inbox consumer (increment 3), reconciliation and retry/circuit breaker o
 |-------|------|--------|
 | 1 | [Optimistic Lock Conflicts and Retry](./phase-01-optimistic-lock-conflicts-and-retry.md) | Completed |
 | 2 | [Early and Out-of-Order Webhooks with Pessimistic Lock](./phase-02-early-and-out-of-order-webhooks-with-pessimistic-lock.md) | Completed |
-| 3 | [Idempotency Lease Fencing](./phase-03-idempotency-lease-fencing.md) | Pending |
+| 3 | [Idempotency Lease Fencing](./phase-03-idempotency-lease-fencing.md) | Completed |
 | 4 | [JMeter Load Test and Bottleneck Report](./phase-04-jmeter-load-test-and-bottleneck-report.md) | Pending |
 
 ## Dependencies
@@ -84,7 +84,7 @@ Kafka / inbox consumer (increment 3), reconciliation and retry/circuit breaker o
 |---|---------|----------|-------------|------------|
 | 1 | Early-webhook fallback used two unsynchronised reads | Critical | Accept | Completed |
 | 2 | In-row `lease_epoch` restarts at 1 after delete (ABA) | Critical | Accept | Completed |
-| 3 | Duplicate of in-flight `RECEIVED` event acked 200 | High | Accept | Phase 2 |
+| 3 | Duplicate of in-flight `RECEIVED` event acked 200 | High | Accept | Completed |
 | 4 | Mock retry on a 2-4 thread pool; retries on 4xx | High | Accept | Phase 2, 4 |
 | 5 | Compose / env / Postman git-ignored: "before" run and clean clone | High | Accept (keep local + recipe) | Phase 1, 4 |
 | 6 | Metrics "bound to localhost" had no mechanism | Medium | Accept | Phase 4 |
@@ -115,7 +115,7 @@ Verification: covered by the red-team pass (fact checks + caller lists in `./rep
 |---|----------|----------|---------|
 | 1 | Zombie create request refused by the fence: what does its client get? | Its own computed response; nothing stored; WARN log | Completed |
 | 2 | Stored replay may be `409 ORDER_ALREADY_EXISTS` after a zombie race | Accept and document in note 08; no change to the 409 body | Completed |
-| 3 | Webhook lock mode | Config toggle, default `pessimistic`; keep/remove decided after phase 4 data | Phase 2, 4 (as written) |
+| 3 | Webhook lock mode | Config toggle, default `pessimistic`; keep/remove decided after phase 4 data | Completed |
 | 4 | Git-ignored compose / env / Postman | Keep local; snapshot + explicit "before" recipe | Phase 1, 4 |
 
 ### Whole-Plan Consistency Sweep

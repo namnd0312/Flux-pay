@@ -3,6 +3,7 @@ package com.fluxpay.gateway.idempotency;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.OptionalLong;
 import java.util.UUID;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -19,7 +20,10 @@ import com.fluxpay.gateway.idempotency.IdempotencyStore.Row;
  *
  * <p>{@link #begin} is a short {@code @Transactional} method called from the non-transactional
  * {@link IdempotencyFilter}; it must not span the controller/provider call. The filter later
- * calls {@link #complete} or {@link #abandon} once the response status is known.
+ * calls {@link #complete} or {@link #abandon} once the response status is known, presenting
+ * the fencing token it got from {@code begin}. A lease is a time-limited claim, not a lock:
+ * "expired" does not prove the previous owner is dead, only the token proves who owns the
+ * key now.
  */
 @Service
 public class IdempotencyService {
@@ -44,8 +48,9 @@ public class IdempotencyService {
     @Transactional
     public IdempotencyOutcome begin(UUID merchantId, String key, String requestHash) {
         Instant now = clock.instant();
-        if (store.claim(merchantId, key, requestHash, now.plus(lease), now, now.plus(ttl))) {
-            return IdempotencyOutcome.ofNew(); // first to claim: run the request
+        OptionalLong claimed = store.claim(merchantId, key, requestHash, now.plus(lease), now, now.plus(ttl));
+        if (claimed.isPresent()) {
+            return IdempotencyOutcome.ofNew(claimed.getAsLong()); // first to claim: run the request
         }
         // Lost the claim: a row already exists. Read it and decide.
         Row row = store.find(merchantId, key).orElse(null);
@@ -65,20 +70,27 @@ public class IdempotencyService {
         if (row.leaseUntil() != null && row.leaseUntil().isAfter(now)) {
             return IdempotencyOutcome.inProgress(); // -> 409
         }
-        if (store.takeOverExpiredLease(merchantId, key, now.plus(lease), now)) {
-            return IdempotencyOutcome.ofNew(); // won the take-over: run it
+        OptionalLong takenOver = store.takeOverExpiredLease(merchantId, key, now.plus(lease), now);
+        if (takenOver.isPresent()) {
+            return IdempotencyOutcome.ofNew(takenOver.getAsLong()); // won the take-over: run it
         }
         return IdempotencyOutcome.inProgress(); // another request took over first
     }
 
+    /**
+     * Store the response for replay. {@code leaseEpoch} is the token {@link #begin} handed out
+     * with NEW. Returns false if this caller is no longer the lease owner (it stalled past the
+     * lease and another request took over): nothing was stored, and nothing must be.
+     */
     @Transactional
-    public void complete(UUID merchantId, String key, int responseStatus, String responseBody) {
-        store.complete(merchantId, key, responseStatus, responseBody);
+    public boolean complete(UUID merchantId, String key, long leaseEpoch, int responseStatus, String responseBody) {
+        return store.complete(merchantId, key, leaseEpoch, responseStatus, responseBody);
     }
 
+    /** Release the key for a retry. Returns false if this caller no longer owns the lease. */
     @Transactional
-    public void abandon(UUID merchantId, String key) {
-        store.delete(merchantId, key);
+    public boolean abandon(UUID merchantId, String key, long leaseEpoch) {
+        return store.deleteOwned(merchantId, key, leaseEpoch);
     }
 
     @Transactional

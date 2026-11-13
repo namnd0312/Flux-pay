@@ -52,9 +52,9 @@ Bốn kết cục của `begin()`:
 
 Khi một request đang chạy, key ở `IN_PROGRESS` với `lease_until = now + 60s`. Nếu worker **chết giữa chừng** (JVM crash) mà không `complete`, một lock vĩnh viễn sẽ **khóa cứng** key đó mãi mãi. Nên ta dùng **lease có hạn**: retry đến khi lease còn hạn → `409`; lease **hết hạn** → request mới **giành quyền** (`UPDATE ... WHERE lease_until < now RETURNING`) và chạy lại. "Worker cũ coi như đã chết."
 
-### Giới hạn đã biết (để dành increment 2)
+### Giới hạn đã biết → đã xử lý ở increment 2
 
-`complete()`/`abandon()` hiện ghi theo `(merchant, key)` **không kèm kiểm tra chủ lease**. Kịch bản hiếm: worker A giành key, **treo** quá 60s (GC/chậm, chưa chết); worker B giành lại lease và chạy. Lúc này *payment* vẫn **đúng một** (tx1 của B đụng `ux_payments_live_order` nếu A đã kịp tạo row → B nhận 409; hoặc ngược lại) — **không hề double-charge**. Nhưng *status lưu để replay* có thể là của A hay B tùy thứ tự ghi. Hệ quả tối đa: một lần replay trả status hơi lệch (hoặc một retry nhận 409). Khắc phục triệt để = **lease fencing** (gắn token/epoch cho lease, `complete` chỉ ghi nếu còn là chủ) — để dành **increment 2 (concurrency hardening)**, nơi các race sâu hơn được xử lý cùng optimistic lock.
+Bản đầu của `complete()`/`abandon()` ghi theo `(merchant, key)` mà **không kiểm tra chủ lease**, nên một worker bị treo quá 60s (zombie) có thể ghi đè hoặc xóa dòng của request đã take over. Đã sửa bằng **fencing token** (`lease_epoch`): xem [note 08](08-lease-fencing.md).
 
 ## 5. Vì sao **database quyết**, không phải application code
 

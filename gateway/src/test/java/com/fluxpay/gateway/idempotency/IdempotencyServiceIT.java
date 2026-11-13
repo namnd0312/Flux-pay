@@ -55,8 +55,8 @@ class IdempotencyServiceIT extends AbstractIntegrationTest {
     @Test
     void completedKeyReplaysStoredResponse() {
         UUID m = UUID.randomUUID();
-        service.begin(m, "k", "hash");
-        service.complete(m, "k", 201, "{\"paymentId\":\"abc\"}");
+        long epoch = service.begin(m, "k", "hash").leaseEpoch();
+        assertThat(service.complete(m, "k", epoch, 201, "{\"paymentId\":\"abc\"}")).isTrue();
         IdempotencyOutcome o = service.begin(m, "k", "hash");
         assertThat(o.kind()).isEqualTo(Kind.REPLAY);
         assertThat(o.responseStatus()).isEqualTo(201);

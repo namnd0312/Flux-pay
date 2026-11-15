@@ -32,18 +32,14 @@ import com.fluxpay.gateway.provider.ProviderWebhookEvent;
  * can tell "payment not ready yet" (come back later) from "payment unknown" (never). See
  * {@link #decideWithoutProviderRef}.
  *
- * <p><b>Lock mode.</b> {@code fluxpay.webhook.lock-mode} picks how the transition guards
- * against a concurrent writer (cancel, sweeper):
- * <ul>
- *   <li>{@code optimistic}: read without a lock; a lost {@code @Version} race is detected
- *       at commit and retried by {@link OptimisticRetry};</li>
- *   <li>{@code pessimistic}: a locking read ({@code SELECT ... FOR NO KEY UPDATE} on
- *       PostgreSQL) takes the row lock at read time,
- *       so other writers queue behind this transaction. A bounded {@code lock_timeout}
- *       turns a long wait into "try again later" instead of a stuck request thread.</li>
- * </ul>
- * The retry wrapper stays in both modes: cancel and the sweeper do not take the row lock,
- * so {@code @Version} is still what catches them.
+ * <p><b>Row lock.</b> The transition reads the payment with a locking read
+ * ({@code SELECT ... FOR NO KEY UPDATE} on PostgreSQL), so a concurrent writer (cancel,
+ * sweeper) queues behind this transaction instead of racing it. A bounded
+ * {@code lock_timeout} turns a long wait into "try again later" instead of a stuck request
+ * thread. The retry wrapper stays: cancel and the sweeper do not take the row lock, so
+ * {@code @Version} is still what catches them. (An optimistic-only variant was measured
+ * under load against this one: same correctness and latency, but more retries; it was
+ * removed. See docs/learning/09-load-test-and-bottlenecks.md.)
  */
 @Component
 class WebhookPaymentApplier {
@@ -52,18 +48,15 @@ class WebhookPaymentApplier {
     private final PaymentStateMachine stateMachine;
     private final OptimisticRetry retry;
     private final TransactionTemplate tx;
-    private final boolean pessimistic;
     private final String lockTimeoutMillis;
 
     WebhookPaymentApplier(PaymentRepository payments, PaymentStateMachine stateMachine, OptimisticRetry retry,
             PlatformTransactionManager txManager,
-            @Value("${fluxpay.webhook.lock-mode}") String lockMode,
             @Value("${fluxpay.webhook.lock-timeout}") Duration lockTimeout) {
         this.payments = payments;
         this.stateMachine = stateMachine;
         this.retry = retry;
         this.tx = new TransactionTemplate(txManager);
-        this.pessimistic = parseLockMode(lockMode);
         if (lockTimeout.toMillis() <= 0) {
             // PostgreSQL reads lock_timeout = 0 as "wait forever", the opposite of the intent.
             throw new IllegalArgumentException("fluxpay.webhook.lock-timeout must be at least 1ms");
@@ -143,9 +136,6 @@ class WebhookPaymentApplier {
     }
 
     private Payment load(UUID paymentId) {
-        if (!pessimistic) {
-            return payments.loadForSweep(paymentId).orElseThrow();
-        }
         // Transaction-local (third argument true): the setting disappears at commit/rollback,
         // so it cannot leak to whoever borrows this pooled connection next.
         payments.setLocalLockTimeout(lockTimeoutMillis);
@@ -166,16 +156,5 @@ class WebhookPaymentApplier {
         } catch (RuntimeException ex) {
             return Optional.empty();
         }
-    }
-
-    private static boolean parseLockMode(String lockMode) {
-        if ("pessimistic".equalsIgnoreCase(lockMode)) {
-            return true;
-        }
-        if ("optimistic".equalsIgnoreCase(lockMode)) {
-            return false;
-        }
-        throw new IllegalArgumentException(
-                "fluxpay.webhook.lock-mode must be 'optimistic' or 'pessimistic' but was '" + lockMode + "'");
     }
 }

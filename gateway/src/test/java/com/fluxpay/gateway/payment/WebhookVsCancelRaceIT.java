@@ -44,8 +44,8 @@ import io.micrometer.core.instrument.MeterRegistry;
  *       the provider's retry would be swallowed as a duplicate).</li>
  * </ul>
  *
- * <p>Runs in the default webhook lock mode (pessimistic). {@link WebhookVsCancelOptimisticModeRaceIT}
- * repeats it with the row lock switched off, where every conflict goes through the retry.
+ * <p>The webhook reads the payment under a row lock; cancel does not lock and is caught by
+ * {@code @Version} plus the retry when it loses.
  */
 class WebhookVsCancelRaceIT extends AbstractIntegrationTest {
 
@@ -76,7 +76,6 @@ class WebhookVsCancelRaceIT extends AbstractIntegrationTest {
 
     @Test
     void loserOfTheRaceGetsABusinessAnswerNeverAServerError() throws Exception {
-        double retriesBefore = retriesSoFar();
         double webhookRetriesBefore = webhookRetriesSoFar();
         ExecutorService pool = Executors.newFixedThreadPool(2);
         List<String> violations = new ArrayList<>();
@@ -133,35 +132,20 @@ class WebhookVsCancelRaceIT extends AbstractIntegrationTest {
                 .as("%d payments raced: webhook won %d, cancel won %d; server errors=%d, events stuck in RECEIVED=%d",
                         PAYMENTS, webhookWins, PAYMENTS - webhookWins, serverErrors, stuckEvents)
                 .isEmpty();
-        if (expectsVersionConflicts()) {
-            // Guard against a green test that never raced: at least one writer must have lost a
-            // version check and been retried, otherwise the invariants above proved nothing.
-            assertThat(retriesSoFar() - retriesBefore).as("optimistic-lock retries during the races").isPositive();
-        } else {
-            // Pessimistic mode: the webhook holds the row lock from its read to its commit, so
-            // nobody can change the row under it and it can never lose a version check. If this
-            // counter moves, the lock mode is not in effect.
-            assertThat(webhookRetriesSoFar() - webhookRetriesBefore)
-                    .as("webhook-path version conflicts while holding the row lock").isZero();
-        }
+        // Guard against a green test that never raced: if the barrier stopped releasing the two
+        // requests together, one side would win every time and the checks above prove nothing.
+        assertThat(webhookWins).as("webhook wins out of %d races (both sides must win sometimes)", PAYMENTS)
+                .isStrictlyBetween(0, PAYMENTS);
+        // The webhook holds the row lock from its read to its commit, so nobody can change the
+        // row under it and it can never lose a version check. If this counter moves, the row
+        // lock is not in effect.
+        assertThat(webhookRetriesSoFar() - webhookRetriesBefore)
+                .as("webhook-path version conflicts while holding the row lock").isZero();
     }
 
     private double webhookRetriesSoFar() {
         return meters.find("fluxpay.payment.optimistic.retries").tag("path", "webhook").counters().stream()
                 .mapToDouble(Counter::count).sum();
-    }
-
-    /**
-     * In the default (pessimistic) webhook mode the row lock makes writers queue: the webhook
-     * itself never conflicts, and whether cancel does depends on timing. The optimistic-mode
-     * subclass turns this on.
-     */
-    protected boolean expectsVersionConflicts() {
-        return false;
-    }
-
-    private double retriesSoFar() {
-        return meters.find("fluxpay.payment.optimistic.retries").counters().stream().mapToDouble(Counter::count).sum();
     }
 
     /** Returns a description of the first broken invariant, or null when the outcome is consistent. */

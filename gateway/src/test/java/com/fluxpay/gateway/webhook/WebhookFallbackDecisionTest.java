@@ -104,8 +104,9 @@ class WebhookFallbackDecisionTest {
         PaymentRepository payments = mock(PaymentRepository.class);
         when(payments.findByProviderCodeAndProviderRef("MOCK", REF)).thenReturn(Optional.empty());
         when(payments.loadForSweep(pending.getId())).thenReturn(Optional.of(pending));
+        when(payments.findByIdForUpdate(pending.getId())).thenReturn(Optional.of(pending));
         var applier = new WebhookPaymentApplier(payments, machine, new OptimisticRetry(new SimpleMeterRegistry()),
-                mock(PlatformTransactionManager.class), "optimistic", Duration.ofSeconds(2));
+                mock(PlatformTransactionManager.class), Duration.ofSeconds(2));
 
         WebhookOutcome o = applier.apply("MOCK", new ProviderWebhookEvent("evt_1", REF,
                 pending.getId().toString(), "SUCCESS", 1000L, NOW.toString()));
@@ -119,7 +120,7 @@ class WebhookFallbackDecisionTest {
     void signedEventWithoutAReferenceOrWithAnUnknownStatusIsRejectedWithoutTouchingAnyPayment() {
         PaymentRepository payments = mock(PaymentRepository.class);
         var applier = new WebhookPaymentApplier(payments, machine, new OptimisticRetry(new SimpleMeterRegistry()),
-                mock(PlatformTransactionManager.class), "optimistic", Duration.ofSeconds(2));
+                mock(PlatformTransactionManager.class), Duration.ofSeconds(2));
         String id = UUID.randomUUID().toString();
 
         assertThat(applier.apply("MOCK", new ProviderWebhookEvent("evt_1", null, id, "SUCCESS", 1000L, null))

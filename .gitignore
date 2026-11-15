@@ -35,3 +35,4 @@ postman
 
 
 docker-compose.increment-1.yml
+load-tests/results/

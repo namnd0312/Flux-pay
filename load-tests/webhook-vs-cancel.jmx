@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
+  <hashTree>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="Flux-pay webhook vs cancel race" enabled="true">
+      <stringProp name="TestPlan.comments">Each iteration: create, pay at the mock (which sends its webhook after MOCK_CALLBACK_DELAY_MS), wait about that long, cancel. Webhook and cancel then hit the same PENDING payment at nearly the same time. Either may win; cancel answers 200 or 409, never 5xx. Properties: threads, loops, cancelAfterMs, cancelJitterMs.</stringProp>
+      <boolProp name="TestPlan.functional_mode">false</boolProp>
+      <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="User Defined Variables" enabled="true">
+        <collectionProp name="Arguments.arguments"/>
+      </elementProp>
+    </TestPlan>
+    <hashTree>
+      <ConfigTestElement guiclass="HttpDefaultsGui" testclass="ConfigTestElement" testname="gateway defaults" enabled="true">
+        <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+          <collectionProp name="Arguments.arguments"/>
+        </elementProp>
+        <stringProp name="HTTPSampler.domain">${__P(host,localhost)}</stringProp>
+        <stringProp name="HTTPSampler.port">${__P(port,8080)}</stringProp>
+        <stringProp name="HTTPSampler.protocol">http</stringProp>
+        <stringProp name="HTTPSampler.connect_timeout">5000</stringProp>
+        <stringProp name="HTTPSampler.response_timeout">30000</stringProp>
+      </ConfigTestElement>
+      <hashTree/>
+      <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="json headers (signature headers are added by hmac-sign.groovy)" enabled="true">
+        <collectionProp name="HeaderManager.headers">
+          <elementProp name="" elementType="Header">
+            <stringProp name="Header.name">Content-Type</stringProp>
+            <stringProp name="Header.value">application/json</stringProp>
+          </elementProp>
+        </collectionProp>
+      </HeaderManager>
+      <hashTree/>
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="merchants" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">startnextloop</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller" enabled="true">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <stringProp name="LoopController.loops">${__P(loops,20)}</stringProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">${__P(threads,50)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${__P(rampup,2)}</stringProp>
+        <boolProp name="ThreadGroup.scheduler">false</boolProp>
+        <stringProp name="ThreadGroup.duration"></stringProp>
+        <stringProp name="ThreadGroup.delay"></stringProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+      </ThreadGroup>
+      <hashTree>
+        <JSR223PreProcessor guiclass="TestBeanGUI" testclass="JSR223PreProcessor" testname="sign merchant API calls" enabled="true">
+          <stringProp name="scriptLanguage">groovy</stringProp>
+          <stringProp name="filename">${__P(scriptDir,.)}/hmac-sign.groovy</stringProp>
+          <stringProp name="cacheKey">true</stringProp>
+          <stringProp name="script"></stringProp>
+        </JSR223PreProcessor>
+        <hashTree/>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="create payment" enabled="true">
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{&quot;orderId&quot;:&quot;${orderId}&quot;,&quot;amount&quot;:100000,&quot;returnUrl&quot;:&quot;https://merchant.example/return&quot;}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <stringProp name="HTTPSampler.path">/api/v1/payments</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <stringProp name="HTTPSampler.contentEncoding">UTF-8</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree><ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="status 201" enabled="true">
+            <collectionProp name="Asserion.test_strings"><stringProp name="code">201</stringProp></collectionProp>
+            <stringProp name="Assertion.custom_message"></stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">true</boolProp>
+            <intProp name="Assertion.test_type">1</intProp>
+          </ResponseAssertion><hashTree/><JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="extract paymentId payUrl" enabled="true">
+            <stringProp name="JSONPostProcessor.referenceNames">paymentId;payUrl</stringProp>
+            <stringProp name="JSONPostProcessor.jsonPathExprs">$.paymentId;$.payUrl</stringProp>
+            <stringProp name="JSONPostProcessor.match_numbers">1;1</stringProp>
+            <stringProp name="JSONPostProcessor.defaultValues">NONE;NONE</stringProp>
+          </JSONPostProcessor><hashTree/></hashTree><HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="customer pays at provider" enabled="true">
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              
+            </collectionProp>
+          </elementProp>
+          <stringProp name="HTTPSampler.path">${payUrl}?outcome=SUCCESS</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <stringProp name="HTTPSampler.contentEncoding">UTF-8</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree><ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="status 202" enabled="true">
+            <collectionProp name="Asserion.test_strings"><stringProp name="code">202</stringProp></collectionProp>
+            <stringProp name="Assertion.custom_message"></stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">true</boolProp>
+            <intProp name="Assertion.test_type">1</intProp>
+          </ResponseAssertion><hashTree/></hashTree><HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="merchant cancels" enabled="true">
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              
+            </collectionProp>
+          </elementProp>
+          <stringProp name="HTTPSampler.path">/api/v1/payments/${paymentId}/cancel</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <stringProp name="HTTPSampler.contentEncoding">UTF-8</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree><ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="status 200|409" enabled="true">
+            <collectionProp name="Asserion.test_strings"><stringProp name="code">200|409</stringProp></collectionProp>
+            <stringProp name="Assertion.custom_message"></stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">true</boolProp>
+            <intProp name="Assertion.test_type">1</intProp>
+          </ResponseAssertion><hashTree/><UniformRandomTimer guiclass="UniformRandomTimerGui" testclass="UniformRandomTimer" testname="wait about the callback delay" enabled="true">
+            <stringProp name="ConstantTimer.delay">${__P(cancelAfterMs,60)}</stringProp>
+            <stringProp name="RandomTimer.range">${__P(cancelJitterMs,80)}</stringProp>
+          </UniformRandomTimer><hashTree/></hashTree><WhileController guiclass="WhileControllerGui" testclass="WhileController" testname="poll until terminal" enabled="true">
+          <stringProp name="WhileController.condition">${__groovy(vars.get(&#x27;status&#x27;) == &#x27;PENDING&#x27; &amp;&amp; (vars.get(&#x27;polls&#x27;) as int) &lt; ((props.get(&#x27;maxPolls&#x27;) ?: &#x27;50&#x27;) as int))}</stringProp>
+        </WhileController>
+        <hashTree><HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="poll payment" enabled="true">
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              
+            </collectionProp>
+          </elementProp>
+          <stringProp name="HTTPSampler.path">/api/v1/payments/${paymentId}</stringProp>
+          <stringProp name="HTTPSampler.method">GET</stringProp>
+          <stringProp name="HTTPSampler.contentEncoding">UTF-8</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree><ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="status 200" enabled="true">
+            <collectionProp name="Asserion.test_strings"><stringProp name="code">200</stringProp></collectionProp>
+            <stringProp name="Assertion.custom_message"></stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">true</boolProp>
+            <intProp name="Assertion.test_type">1</intProp>
+          </ResponseAssertion><hashTree/><JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="extract status" enabled="true">
+            <stringProp name="JSONPostProcessor.referenceNames">status</stringProp>
+            <stringProp name="JSONPostProcessor.jsonPathExprs">$.status</stringProp>
+            <stringProp name="JSONPostProcessor.match_numbers">1</stringProp>
+            <stringProp name="JSONPostProcessor.defaultValues">NONE</stringProp>
+          </JSONPostProcessor><hashTree/><JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor" testname="count poll" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="cacheKey">true</stringProp>
+            <stringProp name="script">vars.put(&#x27;polls&#x27;, String.valueOf((vars.get(&#x27;polls&#x27;) as int) + 1))</stringProp>
+          </JSR223PostProcessor><hashTree/><ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer" testname="wait ${__P(pollMs,100)}" enabled="true">
+            <stringProp name="ConstantTimer.delay">${__P(pollMs,100)}</stringProp>
+          </ConstantTimer><hashTree/></hashTree></hashTree>
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="payment reached a terminal status" enabled="true">
+          <stringProp name="scriptLanguage">groovy</stringProp>
+          <stringProp name="cacheKey">true</stringProp>
+          <stringProp name="script">String s = vars.get(&#x27;status&#x27;)
+SampleResult.setResponseData(s ?: &#x27;&#x27;, &#x27;UTF-8&#x27;)
+if (!(s in [&#x27;SUCCEEDED&#x27;, &#x27;FAILED&#x27;, &#x27;EXPIRED&#x27;, &#x27;CANCELLED&#x27;])) {
+    SampleResult.setSuccessful(false)
+    SampleResult.setResponseMessage(&#x27;not terminal: &#x27; + s + &#x27; after &#x27; + vars.get(&#x27;polls&#x27;) + &#x27; polls&#x27;)
+}</stringProp>
+        </JSR223Sampler><hashTree/>
+      </hashTree>
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>

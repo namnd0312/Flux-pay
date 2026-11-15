@@ -4,7 +4,7 @@ description: >-
   Increment 2 of the learning-first mini payment gateway: handle optimistic-lock
   conflicts, make early webhooks recoverable, add a pessimistic-lock arm, fence
   the idempotency lease, then measure everything with JMeter.
-status: pending
+status: completed
 priority: P2
 branch: main
 tags:
@@ -64,7 +64,7 @@ Kafka / inbox consumer (increment 3), reconciliation and retry/circuit breaker o
 | 1 | [Optimistic Lock Conflicts and Retry](./phase-01-optimistic-lock-conflicts-and-retry.md) | Completed |
 | 2 | [Early and Out-of-Order Webhooks with Pessimistic Lock](./phase-02-early-and-out-of-order-webhooks-with-pessimistic-lock.md) | Completed |
 | 3 | [Idempotency Lease Fencing](./phase-03-idempotency-lease-fencing.md) | Completed |
-| 4 | [JMeter Load Test and Bottleneck Report](./phase-04-jmeter-load-test-and-bottleneck-report.md) | Pending |
+| 4 | [JMeter Load Test and Bottleneck Report](./phase-04-jmeter-load-test-and-bottleneck-report.md) | Completed |
 
 ## Dependencies
 
@@ -82,9 +82,9 @@ Kafka / inbox consumer (increment 3), reconciliation and retry/circuit breaker o
 
 | # | Finding | Severity | Disposition | Applied To |
 |---|---------|----------|-------------|------------|
-| 1 | Early-webhook fallback used two unsynchronised reads | Critical | Accept | Completed |
-| 2 | In-row `lease_epoch` restarts at 1 after delete (ABA) | Critical | Accept | Completed |
-| 3 | Duplicate of in-flight `RECEIVED` event acked 200 | High | Accept | Completed |
+| 1 | Early-webhook fallback used two unsynchronised reads | Critical | Accept | Phase 2 |
+| 2 | In-row `lease_epoch` restarts at 1 after delete (ABA) | Critical | Accept | Phase 3 |
+| 3 | Duplicate of in-flight `RECEIVED` event acked 200 | High | Accept | Phase 2 |
 | 4 | Mock retry on a 2-4 thread pool; retries on 4xx | High | Accept | Phase 2, 4 |
 | 5 | Compose / env / Postman git-ignored: "before" run and clean clone | High | Accept (keep local + recipe) | Phase 1, 4 |
 | 6 | Metrics "bound to localhost" had no mechanism | Medium | Accept | Phase 4 |
@@ -113,9 +113,9 @@ Verification: covered by the red-team pass (fact checks + caller lists in `./rep
 
 | # | Question | Decision | Affects |
 |---|----------|----------|---------|
-| 1 | Zombie create request refused by the fence: what does its client get? | Its own computed response; nothing stored; WARN log | Completed |
-| 2 | Stored replay may be `409 ORDER_ALREADY_EXISTS` after a zombie race | Accept and document in note 08; no change to the 409 body | Completed |
-| 3 | Webhook lock mode | Config toggle, default `pessimistic`; keep/remove decided after phase 4 data | Completed |
+| 1 | Zombie create request refused by the fence: what does its client get? | Its own computed response; nothing stored; WARN log | Phase 3 |
+| 2 | Stored replay may be `409 ORDER_ALREADY_EXISTS` after a zombie race | Accept and document in note 08; no change to the 409 body | Phase 3 |
+| 3 | Webhook lock mode | Config toggle, default `pessimistic`; keep/remove decided after phase 4 data. Decided 2026-11-15: optimistic arm removed | Phase 2, 4 |
 | 4 | Git-ignored compose / env / Postman | Keep local; snapshot + explicit "before" recipe | Phase 1, 4 |
 
 ### Whole-Plan Consistency Sweep

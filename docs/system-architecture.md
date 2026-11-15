@@ -1,4 +1,4 @@
-# Flux-pay — Kiến trúc & Thiết kế tổng thể (Increment 1)
+# Flux-pay — Kiến trúc & Thiết kế tổng thể (Increment 1 + 2)
 
 > Tài liệu "cái nhìn tổng thể" cho mini payment gateway. Mô tả **toàn bộ thiết kế increment 1** (6 phase), kèm luồng end-to-end, mô hình dữ liệu, và lý do từng quyết định. Đánh dấu rõ **cái gì đã build** vs **cái gì còn trong kế hoạch**.
 >
@@ -138,7 +138,7 @@ Gateway, mọi `/api/**` cần 3 header: `X-Merchant-Id`, `X-Timestamp`, `X-Sign
 | `POST /api/v1/payments` | `{orderId, amount, description, returnUrl, provider?}` + `Idempotency-Key` | 201 `{paymentId, status, payUrl, expiresAt}` | Tạo payment. |
 | `GET /api/v1/payments/{id}` | — | payment + transitions | Scope theo merchant; id người khác → 404. |
 | `POST /api/v1/payments/{id}/cancel` | — | CANCELLED | Chỉ từ PENDING, else 409. |
-| `POST /webhooks/{providerCode}` | raw body đã ký | 200 `{received, duplicate, applied, rejectReason?}` | Provider gọi. Không auth merchant. |
+| `POST /webhooks/{providerCode}` | raw body đã ký | 200 `{received, duplicate, applied, rejectReason?}`, hoặc **503** `WEBHOOK_RETRY_LATER` khi nên gửi lại (increment 2) | Provider gọi. Không auth merchant. |
 | `GET /actuator/health` | — | `{status:UP}` | Không auth. |
 
 Mọi lỗi trả **RFC 7807 problem detail** có field `code` ổn định (ví dụ `PAYMENT_NOT_FOUND`, `AUTH_BAD_SIGNATURE`). Viết bởi `ProblemDetailWriter` dùng chung cho cả controller advice lẫn filter.
@@ -245,7 +245,7 @@ Strictly sequential: mỗi phase phụ thuộc phase trước.
 
 ## 12. Những gì hoãn (increment sau)
 
-- **Increment 2:** concurrency hardening (lock + re-read khi webhook tới lúc payment còn CREATED), webhook out-of-order, retry simulation, đo nút thắt connection pool.
+- **Increment 2:** đã xong (2026-11-13), xem mục 15.
 - **Increment 3:** Kafka / async messaging.
 - **Increment 4:** resilience, **reconciliation** (xử lý tiền "lơ lửng" khi webhook SUCCESS tới sau EXPIRED), `queryStatus` chủ động hỏi provider.
 - **Chưa có trong roadmap 6 phase:** gateway chủ động **đẩy webhook về merchant** (merchant callback) — đối xứng với phase 4, sẽ tái dùng `HmacSigner` + event ledger.
@@ -263,3 +263,32 @@ Postman: import `postman/flux-pay.postman_collection.json` + environment. Boot 4
 ## 14. Câu hỏi mở
 
 - **Gateway → merchant callback**: increment 1 chỉ cho merchant pull. Có muốn đưa "gateway đẩy webhook về merchant" thành một increment riêng không, hay chấp nhận pull là đủ cho mục tiêu học?
+
+## 15. Increment 2: đúng đắn dưới đồng thời (2026-11-13 → 2026-11-15)
+
+Chi tiết và số đo ở `docs/learning/06` → `09`. Tóm tắt những gì thay đổi so với các mục trên:
+
+**Ghi payment (bổ sung mục 10).** Mọi khối "đọc payment rồi đổi trạng thái" (create tx2, compensate, cancel, bước áp transition của webhook) chạy qua `OptimisticRetry`: thua `@Version` thì mở transaction mới, đọc lại, thử lại, tối đa 3 lần thử (2 retry). Sweeper không retry. Hết lượt → `503 CONCURRENT_UPDATE`.
+
+**Nhận webhook (thay cho luồng ở mục 8.2).**
+```
+1. verify chữ ký (no tx) → 401. Parse.
+2. giành event: INSERT ... ON CONFLICT DO NOTHING            (lần giao đầu)
+                hoặc UPDATE ... WHERE status='RETRYABLE' AND raw_body=:raw   (gửi lại)
+                hoặc event đã biết: APPLIED/REJECTED → 200 duplicate; RECEIVED → 503
+3. WebhookPaymentApplier: tìm payment theo provider_ref; không thấy thì đọc MỘT lần theo
+   merchantRef và quyết định từ dòng đó (chưa sẵn sàng → RETRYABLE; ...); áp transition
+   trong tx giữ row lock (SELECT ... FOR NO KEY UPDATE)
+4. ghi kết quả: APPLIED | REJECTED | RETRYABLE   (chỉ khi dòng còn RECEIVED)
+```
+"Luôn 200" giờ chỉ đúng cho kết quả chung cuộc. Kết quả tạm thời trả **503** + `Retry-After`. Với `PAYMENT_NOT_READY`, `LOCK_TIMEOUT`, `CONCURRENT_UPDATE` dòng event thành `RETRYABLE`; với `EVENT_IN_PROGRESS` dòng event không đổi (nó vẫn thuộc về lần giao đang chạy).
+
+**Row lock trên đường webhook.** Luôn `SELECT ... FOR NO KEY UPDATE` + `lock_timeout` cục bộ transaction (`fluxpay.webhook.lock-timeout`, mặc định 2s). Nhánh optimistic-only (công tắc `lock-mode`) đã được đo ở phase 4 rồi bỏ: cùng độ đúng, cùng latency, nhiều retry hơn.
+
+**Idempotency (bổ sung mục 8.4).** `idempotency_keys.lease_epoch` (migration V8, lấy từ sequence) là fencing token: `claim`/take-over trả token, `complete`/`abandon` chỉ ghi khi dòng còn mang token đó. Request chạy quá lease không ghi đè/xóa được dòng của chủ mới.
+
+**Mock provider.** Gửi lại webhook khi nhận 5xx/429/không trả lời (6 lần, backoff gấp đôi); knob `auto-pay`, `create.delay-ms`, pool gửi cấu hình được và đếm số bị rơi.
+
+**Load test.** `load-tests/` (JMeter + bất biến SQL; `run.sh` chỉ báo PASSED khi không sample nào hỏng, có tạo payment, mọi bất biến HARD = 0 và mock không rơi webhook). Provider nhanh: hàng đợi hình thành đầu tiên ở connection pool HikariCP (10), chưa xác nhận là nguyên nhân. Provider chậm: request thread Tomcat bị giữ suốt lời gọi provider là nút thắt (lượt 400 thread). Chi tiết: note 09.
+
+**Giới hạn còn lại** (increment 3-4): event kẹt `RECEIVED` khi JVM/DB chết giữa chừng; event `RETRYABLE` khi provider bỏ cuộc; "đã trả tiền nhưng payment `FAILED`" (`PAYMENT_NEVER_ACCEPTED`) cần reconciliation.

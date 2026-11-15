@@ -2,7 +2,7 @@
 
 A mini payment gateway (VNPAY/MoMo style), backend only, built as a **learning-first** project. Every phase reproduces a real failure, explains the concept, fixes it, and verifies the fix. Learning notes live in [`docs/learning/`](docs/learning/) (Vietnamese prose, English technical terms).
 
-This is **Increment 1: the synchronous core** — payment state machine, provider abstraction, mock provider, webhook de-duplication, HMAC auth, idempotency. Concurrency hardening, Kafka, and reconciliation come in later increments.
+**Increment 1** built the synchronous core: payment state machine, provider abstraction, mock provider, webhook de-duplication, HMAC auth, idempotency. **Increment 2** made it correct under concurrency (optimistic-lock retry, recoverable early webhooks, a row lock on the webhook path, a fenced idempotency lease) and added a load-test harness. Kafka and reconciliation come in later increments.
 
 ## Layout
 
@@ -10,6 +10,7 @@ This is **Increment 1: the synchronous core** — payment state machine, provide
 flux-pay/
   gateway/         modular monolith, port 8080 (owns payment state + event ledger)
   mock-provider/   fake VNPAY-style provider, port 8081
+  load-tests/      JMeter scenarios, runner, invariant checks
   postman/         collection + local environment
   docs/learning/   phase-by-phase learning notes
 ```
@@ -86,6 +87,49 @@ FLUXPAY_SECRET_KEY=<new-key> ./mvnw -q -pl gateway exec:java \
   -Dexec.args="demo-merchant demo-secret-change-me"
 # then add a new Flyway migration that UPDATEs merchants.secret with the printed v1:... value.
 ```
+
+## Concurrency behaviour (increment 2)
+
+**Webhook answers.** After a valid signature, `POST /webhooks/{provider}` answers:
+
+- `200` for anything final: applied, duplicate, or a business rejection (`rejectReason` in the body);
+- `503 WEBHOOK_RETRY_LATER` (with `Retry-After: 1` and a `reason`) when the same event may
+  succeed later: the payment is still being created (`PAYMENT_NOT_READY`), the row is locked
+  (`LOCK_TIMEOUT`), the payment write lost every retry (`CONCURRENT_UPDATE`), or another
+  delivery of the event is still running (`EVENT_IN_PROGRESS`). The provider must send the
+  same bytes again.
+
+**Webhook row lock.** The webhook path reads the payment with `SELECT ... FOR NO KEY UPDATE`
+and waits at most `fluxpay.webhook.lock-timeout` (default 2s) for the lock. An optimistic-only
+variant was measured against it and removed; see
+[`docs/learning/09-load-test-and-bottlenecks.md`](docs/learning/09-load-test-and-bottlenecks.md).
+
+**Lost a race.** A payment write that loses a version race is tried up to 3 times in total
+(2 retries); the caller then gets its business answer (for example `409 PAYMENT_ILLEGAL_TRANSITION`).
+
+## Load tests
+
+JMeter 5.6+ on the PATH, the compose stack running with the metrics override:
+
+```bash
+# start (or restart) the stack with metrics; the race scenario needs the mock to delay its webhook
+MOCK_CALLBACK_DELAY_MS=100 docker compose -f docker-compose.yml -f load-tests/docker-compose.loadtest.yml up -d --build
+
+METRICS=1 load-tests/run.sh webhook-vs-cancel -Jthreads=50 -Jloops=20
+METRICS=1 load-tests/run.sh baseline-create-pay-poll -Jthreads=50 -Jduration=30
+load-tests/run.sh same-key-burst -Jthreads=20 -Jloops=20
+```
+
+Each run writes a JMeter HTML report under `load-tests/results/`, waits for the system to
+settle, and checks `load-tests/verify-invariants.sql`. The run fails if any JMeter sample
+failed, if it created no payment, if any `HARD` invariant is not 0, or (with `METRICS=1`)
+if the mock dropped a webhook. The invariants cover the whole database: reset it between
+runs (`docker compose ... down -v`, or truncate the payment tables).
+
+The override publishes unauthenticated metrics on `127.0.0.1:9090` (gateway) and `:9091`
+(mock) only; do not use it as the default stack. With it, `/actuator/*` (health included)
+moves to those ports: `curl 127.0.0.1:9090/actuator/health`. `docker-compose.yml` itself is
+a local, untracked file.
 
 ## Learning notes
 

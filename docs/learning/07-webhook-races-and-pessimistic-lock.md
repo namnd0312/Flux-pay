@@ -100,7 +100,7 @@ select ... from payments p1_0 where p1_0.id = ? for no key update of p1_0
 
 Đây là SQL thật Hibernate 7 sinh ra cho `@Lock(PESSIMISTIC_WRITE)` trên PostgreSQL. Lưu ý là `FOR NO KEY UPDATE`, không phải `FOR UPDATE`: vẫn chặn mọi UPDATE/lock khác trên dòng, nhưng **không** chặn `FOR KEY SHARE` — loại khóa mà một transaction **khác** cần khi insert dòng con có foreign key tới `payments` (ví dụ audit row của cancel). Transaction đó vì thế không bị chặn ở câu insert; nó chỉ phải chờ khi tới câu UPDATE `payments` của chính nó. (Một transaction không bao giờ tự chặn bởi khóa của mình.)
 
-Bật/tắt bằng `fluxpay.webhook.lock-mode` (`pessimistic` mặc định, hoặc `optimistic`), để phase 4 đo cả hai.
+Lúc viết note này có công tắc `fluxpay.webhook.lock-mode` (`pessimistic` | `optimistic`) để phase 4 đo cả hai. Sau khi đo (note 09, mục 3), nhánh optimistic đã bị **bỏ**: đường webhook giờ luôn lấy row lock.
 
 | | Optimistic + retry | Pessimistic |
 |---|---|---|
@@ -111,7 +111,7 @@ Bật/tắt bằng `fluxpay.webhook.lock-mode` (`pessimistic` mặc định, ho�
 
 Ở đây mỗi transaction chỉ khóa **một** dòng nên không có vấn đề thứ tự khóa.
 
-**Hai cơ chế sống chung.** Chỉ webhook lấy row lock; cancel và sweeper thì không. Khi webhook đang giữ khóa, câu UPDATE của cancel phải chờ; webhook commit xong, cancel ghi với version cũ → thua version check → retry (note 06) → 409. Khóa xếp hàng writer; `@Version` vẫn bắt kẻ không lấy khóa. `WebhookVsCancelRaceIT` chạy ở cả hai mode và giữ cùng bộ bất biến.
+**Hai cơ chế sống chung.** Chỉ webhook lấy row lock; cancel và sweeper thì không. Khi webhook đang giữ khóa, câu UPDATE của cancel phải chờ; webhook commit xong, cancel ghi với version cũ → thua version check → retry (note 06) → 409. Khóa xếp hàng writer; `@Version` vẫn bắt kẻ không lấy khóa. `WebhookVsCancelRaceIT` kiểm bộ bất biến đó, và kiểm thêm rằng đường webhook **không bao giờ** retry (nếu có, row lock không còn hiệu lực).
 
 ### Lock timeout
 

@@ -25,7 +25,7 @@ class PaymentStateMachineTest {
         EXPECTED.put(PaymentStatus.CREATED,
                 Set.of(PaymentStatus.UNDER_REVIEW, PaymentStatus.PENDING, PaymentStatus.FAILED));
         EXPECTED.put(PaymentStatus.UNDER_REVIEW,
-                Set.of(PaymentStatus.FAILED, PaymentStatus.EXPIRED, PaymentStatus.CANCELLED));
+                Set.of(PaymentStatus.CREATED, PaymentStatus.FAILED, PaymentStatus.EXPIRED, PaymentStatus.CANCELLED));
         EXPECTED.put(PaymentStatus.PENDING,
                 Set.of(PaymentStatus.SUCCEEDED, PaymentStatus.FAILED, PaymentStatus.EXPIRED, PaymentStatus.CANCELLED));
         EXPECTED.put(PaymentStatus.SUCCEEDED, Set.of());

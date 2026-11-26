@@ -115,7 +115,8 @@ stateDiagram-v2
   CREATED --> UNDER_REVIEW: risk rule REVIEW (increment 3a)
   UNDER_REVIEW --> CANCELLED: merchant huỷ
   UNDER_REVIEW --> EXPIRED: sweeper (quá hạn duyệt)
-  UNDER_REVIEW --> FAILED: operator từ chối (phase 4, chưa build)
+  UNDER_REVIEW --> FAILED: operator từ chối
+  UNDER_REVIEW --> CREATED: operator duyệt (rồi đi tiếp như payment mới)
   PENDING --> SUCCEEDED: webhook SUCCESS
   PENDING --> FAILED: webhook FAILED
   PENDING --> EXPIRED: sweeper (quá hạn)
@@ -129,7 +130,7 @@ stateDiagram-v2
 | Từ | Được phép sang |
 |---|---|
 | CREATED | UNDER_REVIEW, PENDING, FAILED |
-| UNDER_REVIEW | FAILED, EXPIRED, CANCELLED |
+| UNDER_REVIEW | CREATED, FAILED, EXPIRED, CANCELLED |
 | PENDING | SUCCEEDED, FAILED, EXPIRED, CANCELLED |
 | SUCCEEDED / FAILED / EXPIRED / CANCELLED | (terminal, không đi đâu) |
 
@@ -141,11 +142,14 @@ Gateway, mọi `/api/**` cần 3 header: `X-Merchant-Id`, `X-Timestamp`, `X-Sign
 
 | Method + Path | Vào | Ra | Ghi chú |
 |---|---|---|---|
-| `POST /api/v1/payments` | `{orderId, amount, description, returnUrl, provider?}` + `Idempotency-Key` | 201 `{paymentId, status, payUrl, expiresAt}` | Tạo payment. **422 `RISK_REJECTED`** khi một risk rule từ chối (increment 3a). |
+| `POST /api/v1/payments` | `{orderId, amount, description, returnUrl, provider?}` + `Idempotency-Key` | 201 `{paymentId, status, payUrl, expiresAt}` | Tạo payment. **422 `RISK_REJECTED`** khi một risk rule từ chối; 201 với `status = UNDER_REVIEW`, `payUrl = null` khi bị giữ chờ duyệt (increment 3a). |
 | `GET /api/v1/payments/{id}` | — | payment + transitions | Scope theo merchant; id người khác → 404. |
 | `POST /api/v1/payments/{id}/cancel` | — | CANCELLED | Chỉ từ PENDING, else 409. |
 | `POST /webhooks/{providerCode}` | raw body đã ký | 200 `{received, duplicate, applied, rejectReason?}`, hoặc **503** `WEBHOOK_RETRY_LATER` khi nên gửi lại (increment 2) | Provider gọi. Không auth merchant. |
 | `GET /actuator/health` | — | `{status:UP}` | Không auth. |
+| `GET /internal/reviews` | header `X-Admin-Token` | danh sách payment đang `UNDER_REVIEW` (tối đa 100) | Operator. Không scope theo merchant. |
+| `POST /internal/reviews/{id}/approve` | header `X-Admin-Token` | 200 payment + ledger (`PENDING`); 409 nếu không còn bị giữ; 502 nếu provider lỗi | Operator. |
+| `POST /internal/reviews/{id}/reject` | header `X-Admin-Token` | 200 payment + ledger (`FAILED`); 409 nếu không còn bị giữ | Operator. |
 
 Mọi lỗi trả **RFC 7807 problem detail** có field `code` ổn định (ví dụ `PAYMENT_NOT_FOUND`, `AUTH_BAD_SIGNATURE`). Viết bởi `ProblemDetailWriter` dùng chung cho cả controller advice lẫn filter.
 
@@ -299,9 +303,9 @@ Chi tiết và số đo ở `docs/learning/06` → `09`. Tóm tắt những gì 
 
 **Giới hạn còn lại** (increment 3-4): event kẹt `RECEIVED` khi JVM/DB chết giữa chừng; event `RETRYABLE` khi provider bỏ cuộc; "đã trả tiền nhưng payment `FAILED`" (`PAYMENT_NEVER_ACCEPTED`) cần reconciliation.
 
-## 16. Increment 3a: risk rule engine (đang làm, bắt đầu 2026-11-26)
+## 16. Increment 3a: risk rule engine (2026-11-26)
 
-Chi tiết ở `docs/learning/10` → `12`. Kế hoạch: `plans/261124-2329-risk-rule-engine-with-review-hold/`. **Đã build: phase 1** (evaluator + `REJECT` lúc create), **phase 2** (cache luật + audit) và **phase 3** (action `REVIEW`, trạng thái `UNDER_REVIEW`). Chưa build: operator approve/reject (phase 4).
+Chi tiết ở `docs/learning/10` → `13`. Kế hoạch: `plans/261124-2329-risk-rule-engine-with-review-hold/`. Cả 4 phase đã build: evaluator + `REJECT`, cache luật + audit, action `REVIEW` + trạng thái `UNDER_REVIEW`, operator approve/reject.
 
 **Package `risk`** không phụ thuộc `payment`. `payment` gọi vào `risk`, không có chiều ngược lại.
 
@@ -327,10 +331,23 @@ Chi tiết ở `docs/learning/10` → `12`. Kế hoạch: `plans/261124-2329-ris
 
 **`UNDER_REVIEW` là trạng thái live.** `ux_payments_live_order` (V11) giờ gồm `CREATED, UNDER_REVIEW, PENDING, SUCCEEDED`, nên create lại cùng order khi đang bị giữ → 409. `PaymentSweepService.expireOverdue()` quét cả `PENDING` (`EXPIRED_BY_SWEEPER`) lẫn `UNDER_REVIEW` (`REVIEW_TIMEOUT`). Merchant cancel được payment bị giữ. Webhook không chạm được vào nó (không có `provider_ref` → `PAYMENT_NEVER_ACCEPTED`).
 
-**Tách lớp.** Các bước chuyển theo thời gian (`expireOverdue`, `failAbandonedCreated`) đã chuyển từ `PaymentOrchestrator` sang `PaymentSweepService`.
+**Operator duyệt (`PaymentReviewService`, `/internal/reviews`).**
+```
+approve: claim tx  { phải là UNDER_REVIEW; resolve provider; UNDER_REVIEW -> CREATED (REVIEW_APPROVED, OPERATOR);
+                     expires_at = now + fluxpay.payment.expiry }
+         provider.createPayment (không transaction) -> tx { provider_ref, pay_url; CREATED -> PENDING }
+reject:  tx { phải là UNDER_REVIEW; UNDER_REVIEW -> FAILED (RISK_REVIEW_REJECTED, OPERATOR) }
+```
+Claim là bước chỉ một người thắng: approve thứ hai, cancel, reject hay timeout thua cuộc đều nhận 409 và **không** gọi provider. Luật không được đánh giá lại. Reject kiểm tra trạng thái tường minh vì `PENDING → FAILED` hợp lệ trong bảng transition.
+
+**Tách lớp trong `payment`.** `PaymentOrchestrator` (create/get/cancel của merchant), `PaymentProviderHandoff` (lời gọi provider + `CREATED → PENDING` + compensate, dùng chung cho create và approve), `PaymentReviewService` (operator), `PaymentSweepService` (`expireOverdue`, `failAbandonedCreated`).
+
+**Sweeper.** `failAbandonedCreated()` tính tuổi bằng `updated_at` (lúc dòng vào `CREATED`), không phải `created_at`: payment được duyệt sau một lần giữ dài không bị coi là bỏ rơi.
+
+**Auth cho `/internal/*`.** `AdminTokenFilter`: header `X-Admin-Token` so với `fluxpay.admin.token` (`FLUXPAY_ADMIN_TOKEN`) bằng `MessageDigest.isEqual`; sai/thiếu → 401 `ADMIN_AUTH_FAILED`; token cấu hình trống → ứng dụng không khởi động. Tách hẳn khỏi `MerchantAuthFilter` (`/api/*`): credential bên này không mở được bên kia. `TransitionSource` có thêm `OPERATOR`.
 
 422 là status được `IdempotencyFilter` lưu, nên cùng key sẽ replay lời từ chối mà không đánh giá lại (không thêm dòng audit).
 
 **Hỏng hóc.** Một luật không compile được: bỏ qua kèm log ERROR (fail-open cho riêng luật đó, không bao giờ thành 500). Không đọc được bảng luật lúc refresh: giữ danh sách đã nạp trước đó.
 
-**Giới hạn hiện tại:** luật cũ tối đa 10s sau khi sửa; `risk_decisions` chưa có job dọn; luật hỏng chỉ có log; payment bị giữ chưa duyệt được (chỉ cancel hoặc hết hạn).
+**Giới hạn hiện tại:** luật cũ tối đa 10s sau khi sửa; `risk_decisions` chưa có job dọn; luật hỏng chỉ có log; admin token dùng chung, không có danh tính operator; merchant không được báo kết quả duyệt (phải poll).

@@ -23,7 +23,7 @@ flux-pay/
 
 ## Run
 
-With Docker running, copy the dev env file first (it carries the secret-encryption key the gateway needs to start):
+With Docker running, copy the dev env file first (it carries the secret-encryption key and the operator token the gateway needs to start; an existing `.env` needs the new `FLUXPAY_ADMIN_TOKEN` line from `.env.example`):
 
 ```bash
 cp .env.example .env
@@ -118,9 +118,24 @@ the rule's `reason_code`), writes no payment row and calls no provider. The same
 A `REVIEW` match holds the payment instead: the answer is `201` with `status: "UNDER_REVIEW"`
 and **`payUrl: null`**, and no provider is called. A held payment still occupies its order (a
 second create is `409 ORDER_ALREADY_EXISTS`), can be cancelled by the merchant, and is expired
-with reason `REVIEW_TIMEOUT` after `fluxpay.risk.review-timeout` (30m). Approving a held
-payment is not implemented yet. Seeded rules: above 50,000,000 is rejected, above 20,000,000
-is held.
+with reason `REVIEW_TIMEOUT` after `fluxpay.risk.review-timeout` (30m). Seeded rules: above
+50,000,000 is rejected, above 20,000,000 is held.
+
+An operator decides held payments through `/internal/reviews`, authenticated by the
+`X-Admin-Token` header (value of `FLUXPAY_ADMIN_TOKEN`; the gateway refuses to start if it is
+unset, and merchant credentials do not open these endpoints):
+
+| Call | Result |
+|---|---|
+| `GET /internal/reviews` | held payments, oldest first (at most 100), with the rule's reason and the review deadline |
+| `POST /internal/reviews/{paymentId}/approve` | `200`: the payment goes to the provider and becomes `PENDING` with a pay URL and a fresh expiry. `502` if the provider refuses (payment `FAILED`) |
+| `POST /internal/reviews/{paymentId}/reject` | `200`: the payment becomes `FAILED` (`RISK_REVIEW_REJECTED`) and the order can be created again |
+
+Both answer `409 PAYMENT_ILLEGAL_TRANSITION` when the payment is no longer held (already
+decided, cancelled, or timed out) and `404` for an unknown id. Concurrent approvals call the
+provider once. The merchant is not notified of the outcome and must poll
+`GET /api/v1/payments/{id}`; an idempotent replay of the create still returns the original
+`UNDER_REVIEW` body. The token is one shared secret: the ledger records `OPERATOR`, not who.
 
 Rules are held compiled in memory and reloaded every `fluxpay.risk.refresh-interval` (10s), so a
 change takes effect within that time without a restart; until then requests are decided by the
@@ -149,8 +164,9 @@ A condition is `{"all":[...]}`, `{"any":[...]}` or a leaf `{"field","op","value"
 skipped with an ERROR log (`Risk rule <id> is invalid and was skipped`); it does not fail
 requests, and the payments it was meant to stop are let through. See
 [`docs/learning/10-rule-engine-facts-and-conditions.md`](docs/learning/10-rule-engine-facts-and-conditions.md),
-[`11-rule-cache-and-decision-audit.md`](docs/learning/11-rule-cache-and-decision-audit.md) and
-[`12-review-hold-and-live-states.md`](docs/learning/12-review-hold-and-live-states.md).
+[`11-rule-cache-and-decision-audit.md`](docs/learning/11-rule-cache-and-decision-audit.md),
+[`12-review-hold-and-live-states.md`](docs/learning/12-review-hold-and-live-states.md) and
+[`13-operator-approval-and-claim-step.md`](docs/learning/13-operator-approval-and-claim-step.md).
 
 ## Load tests
 

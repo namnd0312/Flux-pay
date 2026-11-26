@@ -6,8 +6,6 @@ import java.time.ZoneId;
 import java.util.List;
 import java.util.UUID;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -16,9 +14,6 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import com.fluxpay.gateway.idempotency.OrderAlreadyExistsException;
 import com.fluxpay.gateway.provider.PaymentProvider;
-import com.fluxpay.gateway.provider.ProviderException;
-import com.fluxpay.gateway.provider.ProviderPaymentRequest;
-import com.fluxpay.gateway.provider.ProviderPaymentResult;
 import com.fluxpay.gateway.provider.ProviderRegistry;
 import com.fluxpay.gateway.risk.RiskDecision;
 import com.fluxpay.gateway.risk.RiskDecisionStore;
@@ -27,23 +22,16 @@ import com.fluxpay.gateway.risk.RiskFacts;
 import com.fluxpay.gateway.risk.RiskRejectedException;
 
 /**
- * Owns the transaction boundaries for the payment lifecycle. Status changes are delegated
+ * The merchant-facing payment operations: create, read, cancel. Status changes are delegated
  * to {@link PaymentStateMachine}; this class never calls {@code setStatus} directly, and
  * it never names a concrete provider (it resolves one through {@link ProviderRegistry}).
  *
  * <p>{@link #create} first asks the risk rules ({@link RiskEngine}). A rejection ends the
  * request with only its decision recorded. A review decision inserts the payment and moves it
- * to UNDER_REVIEW in one transaction and stops there: no provider is called. An allowed create then runs as two transactions around a provider HTTP call that is made
- * with no transaction open, so a pooled DB connection is never held for the length of an
- * HTTP timeout:
- * <ol>
- *   <li>tx1: insert the payment as CREATED together with its risk decision, and commit;</li>
- *   <li>call the provider (no transaction);</li>
- *   <li>tx2: store the provider ref/pay URL and transition to PENDING.</li>
- * </ol>
- * A provider failure compensates the committed CREATED row to FAILED (502); any other
- * failure compensates to FAILED with an internal reason (500). A JVM death between tx1 and
- * tx2 leaves a CREATED row, which {@link PaymentSweepService#failAbandonedCreated} later fails.
+ * to UNDER_REVIEW in one transaction and stops there: no provider is called until an operator
+ * approves it ({@link PaymentReviewService}). An allowed create commits the payment as CREATED
+ * together with its risk decision (tx1) and then hands it to the provider through
+ * {@link PaymentProviderHandoff}, which makes the HTTP call with no transaction open.
  *
  * <p>Every block that changes an existing payment runs through {@link OptimisticRetry}: two
  * writers can race on one row (webhook vs cancel vs sweeper), and the loser must re-read
@@ -52,14 +40,13 @@ import com.fluxpay.gateway.risk.RiskRejectedException;
 @Service
 public class PaymentOrchestrator {
 
-    private static final Logger log = LoggerFactory.getLogger(PaymentOrchestrator.class);
-
     private final PaymentRepository payments;
     private final PaymentTransitionRepository transitions;
     private final PaymentStateMachine stateMachine;
     private final ProviderRegistry providers;
     private final RiskEngine riskEngine;
     private final RiskDecisionStore riskDecisions;
+    private final PaymentProviderHandoff handoff;
     private final ZoneId riskZone;
     private final TransactionTemplate tx;
     private final OptimisticRetry retry;
@@ -69,7 +56,8 @@ public class PaymentOrchestrator {
 
     public PaymentOrchestrator(PaymentRepository payments, PaymentTransitionRepository transitions,
             PaymentStateMachine stateMachine, ProviderRegistry providers, RiskEngine riskEngine,
-            RiskDecisionStore riskDecisions, PlatformTransactionManager txManager, OptimisticRetry retry, Clock clock,
+            RiskDecisionStore riskDecisions, PaymentProviderHandoff handoff,
+            PlatformTransactionManager txManager, OptimisticRetry retry, Clock clock,
             @Value("${fluxpay.payment.expiry}") Duration expiry,
             @Value("${fluxpay.risk.zone}") ZoneId riskZone,
             @Value("${fluxpay.risk.review-timeout}") Duration reviewTimeout) {
@@ -79,6 +67,7 @@ public class PaymentOrchestrator {
         this.providers = providers;
         this.riskEngine = riskEngine;
         this.riskDecisions = riskDecisions;
+        this.handoff = handoff;
         this.riskZone = riskZone;
         this.tx = new TransactionTemplate(txManager);
         this.retry = retry;
@@ -132,37 +121,7 @@ public class PaymentOrchestrator {
             return payment; // no provider call, no pay URL
         }
 
-        ProviderPaymentResult result;
-        try {
-            // No transaction is open here: a slow provider never holds a DB connection.
-            result = provider.createPayment(new ProviderPaymentRequest(id, amount, null, null));
-        } catch (ProviderException ex) {
-            compensateToFailed(id, merchantId, ex.getReasonCode());
-            throw ex; // -> 502 PROVIDER_UNAVAILABLE
-        } catch (RuntimeException ex) {
-            log.error("Unexpected error creating payment {} at provider {}", id, code, ex);
-            compensateToFailed(id, merchantId, "INTERNAL_ERROR");
-            throw ex; // -> 500
-        }
-
-        // tx2: record provider result, move to PENDING. Retried if it loses a version race.
-        return retry.execute("create", tx, () -> {
-            var p = payments.findByIdAndMerchantId(id, merchantId).orElseThrow(() -> new PaymentNotFoundException(id));
-            p.setProviderCode(code);
-            p.setProviderRef(result.providerRef());
-            p.setPayUrl(result.payUrl());
-            stateMachine.transition(p, PaymentStatus.PENDING, "PROVIDER_ACCEPTED", TransitionSource.SYSTEM);
-            return p;
-        });
-    }
-
-    private void compensateToFailed(UUID id, UUID merchantId, String reasonCode) {
-        retry.execute("compensate", tx, () -> {
-            var p = payments.findByIdAndMerchantId(id, merchantId)
-                    .orElseThrow(() -> new PaymentNotFoundException(id));
-            stateMachine.transition(p, PaymentStatus.FAILED, reasonCode, TransitionSource.SYSTEM);
-            return p;
-        });
+        return handoff.submit(provider, id, merchantId, amount);
     }
 
     public Payment get(UUID id, UUID merchantId) {

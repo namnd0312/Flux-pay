@@ -44,6 +44,9 @@ public abstract class AbstractIntegrationTest {
     /** Plaintext secret of the DEMO merchant (ciphertext seeded by V5 decrypts to this). */
     protected static final String DEMO_SECRET = "demo-secret-change-me";
 
+    /** Operator token of the test profile (see application-test.yml). */
+    protected static final String ADMIN_TOKEN = "test-admin-token";
+
     private static final HmacSigner SIGNER = new HmacSigner();
 
     @ServiceConnection
@@ -70,6 +73,14 @@ public abstract class AbstractIntegrationTest {
             byte[] canonical = CanonicalRequest.build(request.getMethod(), request.getRequestURI(), ts,
                     idempotencyKey, body == null ? new byte[0] : body);
             request.addHeader("X-Signature", SIGNER.hex(secret.getBytes(StandardCharsets.UTF_8), canonical));
+            return request;
+        };
+    }
+
+    /** Authenticates a request to {@code /internal/**} as the operator. */
+    protected static RequestPostProcessor admin() {
+        return request -> {
+            request.addHeader("X-Admin-Token", ADMIN_TOKEN);
             return request;
         };
     }

@@ -35,6 +35,10 @@ fluxpay:
   # AES-256 key (base64, 32 bytes) for merchant secret encryption. No default on purpose:
   # the app must fail to start if it is unset (see SecretCipher). Dev value lives in .env.
   secret-key: ${FLUXPAY_SECRET_KEY:}
+  admin:
+    # Shared secret for the operator endpoints under /internal (header X-Admin-Token). No default
+    # on purpose: the app must fail to start if it is unset (see AdminTokenFilter).
+    token: ${FLUXPAY_ADMIN_TOKEN:}
   auth:
     # A request whose X-Timestamp is further than this from "now" is rejected (replay bound).
     timestamp-tolerance: 5m

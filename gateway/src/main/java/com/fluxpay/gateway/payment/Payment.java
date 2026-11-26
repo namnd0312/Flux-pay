@@ -99,6 +99,14 @@ public class Payment implements Persistable<UUID> {
         this.updatedAt = now;
     }
 
+    /**
+     * The deadline means different things in different states (review deadline while held,
+     * payment deadline once payable), so it is reset when a held payment is approved.
+     */
+    public void setExpiresAt(Instant expiresAt) {
+        this.expiresAt = expiresAt;
+    }
+
     public void setProviderCode(String providerCode) {
         this.providerCode = providerCode;
     }

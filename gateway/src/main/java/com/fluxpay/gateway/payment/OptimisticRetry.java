@@ -23,11 +23,12 @@ import io.micrometer.core.instrument.MeterRegistry;
  * attempt.
  *
  * <p>Why three attempts is enough: the version only changes together with a status
- * transition, and a payment makes at most two transitions in its life (CREATED -> PENDING
- * -> one terminal state). So a writer can lose at most twice, and after losing, its re-read
- * sees the new status and the state machine gives the business answer (usually
- * {@link IllegalPaymentTransitionException}). Only the lock conflict is retried; a business
- * rejection is an answer, not a conflict, and passes straight through.
+ * transition, and after losing, a writer's re-read sees the new status. For every writer in
+ * the codebase that new status is one it may not leave the way it wanted (a cancel that lost
+ * to an approval finds CREATED, a second approval finds CREATED or PENDING, a hand-off that
+ * lost to the sweeper finds FAILED), so the state machine gives the business answer (usually
+ * {@link IllegalPaymentTransitionException}) on the second attempt. Only the lock conflict is
+ * retried; a business rejection is an answer, not a conflict, and passes straight through.
  */
 @Component
 public class OptimisticRetry {
@@ -45,7 +46,7 @@ public class OptimisticRetry {
 
     /**
      * @param path short label of the caller ({@code create}, {@code cancel}, {@code webhook},
-     *             {@code compensate}); becomes the {@code path} tag of the retry counter
+     *             {@code compensate}, {@code approve}, {@code reject}); becomes the {@code path} tag of the retry counter
      * @param tx   template that opens one new transaction per attempt
      * @param work the block to run; it must re-read the payment on every call
      * @throws OptimisticLockingFailureException if the last attempt also loses the race

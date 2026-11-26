@@ -4,5 +4,7 @@ package com.fluxpay.gateway.payment;
 public enum TransitionSource {
     MERCHANT,
     PROVIDER,
-    SYSTEM
+    SYSTEM,
+    /** A person deciding a held payment through the internal API. */
+    OPERATOR
 }

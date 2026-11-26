@@ -14,6 +14,9 @@ fluxpay:
   # Dev-only AES key, committed so `./mvnw verify` needs no env vars. NEVER reuse in prod.
   # Same key encrypted the DEMO secret in V5, so the startup self-check and auth both pass.
   secret-key: woTutwqDuw6XWQ5m5yWqZcE4nBglcAs9sIHaBw/5tKo=
+  admin:
+    # Test-only operator token, committed so `./mvnw verify` needs no env vars.
+    token: test-admin-token
   providers:
     # CountingFakeProvider registers code MOCK under the test profile (the real adapter is excluded).
     default: MOCK

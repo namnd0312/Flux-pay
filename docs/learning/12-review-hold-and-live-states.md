@@ -87,8 +87,8 @@ GET /api/v1/payments/{id}
 |---|---|---|
 | `UNDER_REVIEW → CANCELLED` | merchant (`POST .../cancel`) | `MERCHANT_CANCEL` |
 | `UNDER_REVIEW → EXPIRED` | sweeper, khi quá `expires_at` | `REVIEW_TIMEOUT` |
-| `UNDER_REVIEW → FAILED` | operator từ chối | phase 4 |
-| `UNDER_REVIEW → CREATED` | operator duyệt | phase 4, **chưa có** |
+| `UNDER_REVIEW → FAILED` | operator từ chối | `RISK_REVIEW_REJECTED` (phase 4, note 13) |
+| `UNDER_REVIEW → CREATED` | operator duyệt | `REVIEW_APPROVED` (phase 4, note 13) |
 
 `cancel()` không sửa dòng nào: nó vốn chỉ hỏi state machine, và bảng transition giờ cho phép. Đó là lợi ích của việc để luật chuyển trạng thái ở **một** chỗ.
 
@@ -112,7 +112,7 @@ Thêm một giá trị enum vào response là **breaking change** với client n
 
 ## Giới hạn đã biết
 
-- **Chưa duyệt được.** Payment bị giữ chỉ có thể bị hủy hoặc hết hạn; approve/reject của operator là phase 4.
+- **Chưa duyệt được** (ở phase này). Approve/reject của operator có từ phase 4: xem note 13.
 - **Không báo cho merchant** khi payment bị giữ kết thúc; merchant phải poll `GET` (push đến cùng Kafka ở increment 3).
 - Luật seed giữ **mọi** payment trên 20.000.000: không phân biệt merchant.
 - Danh sách trạng thái live vẫn nằm ở nhiều nơi (mục 1). Không có test nào tự phát hiện nơi thứ sáu nếu sau này có.

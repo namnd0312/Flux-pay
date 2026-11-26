@@ -59,9 +59,10 @@ public class PaymentSweepService {
     }
 
     /**
-     * Fail CREATED rows older than the created-timeout: these are payments where the
-     * create flow died between tx1 and tx2 (e.g. JVM crash), leaving an orphan CREATED row
-     * no provider ever accepted. Increment 4 reconciliation can instead query the provider.
+     * Fail payments that have been CREATED for longer than the created-timeout: the hand-off to
+     * the provider died half way (e.g. a JVM crash), leaving a CREATED row that nobody will
+     * finish. That covers a new payment and a held payment whose approval died after its claim.
+     * Increment 4 reconciliation can instead query the provider.
      */
     public int failAbandonedCreated() {
         return sweep(payments.findAbandonedCreatedIds(PaymentStatus.CREATED, clock.instant().minus(createdTimeout)),

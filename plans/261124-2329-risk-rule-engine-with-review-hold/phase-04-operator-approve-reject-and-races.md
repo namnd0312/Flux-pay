@@ -1,7 +1,7 @@
 ---
 phase: 4
 title: "Operator approve reject and races"
-status: pending
+status: completed
 priority: P1
 dependencies: [3]
 effort: "2 sessions"
@@ -63,10 +63,10 @@ reject(paymentId):
 9. Note 13: why approve needs a claim before the HTTP call, how it mirrors the two-transaction create, why the sweeper column mattered, limits of a shared admin token.
 
 ## Success Criteria
-- [ ] Acceptance 7, 8, 9, 10 pass
-- [ ] Race IT stable over 20 consecutive runs
-- [ ] No provider call inside a transaction (code review of `approveReview`)
-- [ ] README and architecture doc match the shipped behaviour; note 13 written
+- [x] Acceptance 7, 8, 9, 10 pass
+- [x] Race IT stable over 20 consecutive runs
+- [x] No provider call inside a transaction (code review of `approveReview`)
+- [x] README and architecture doc match the shipped behaviour; note 13 written
 
 ## Risk Assessment
 - `updated_at` semantics: anything else that touches a `CREATED` row would extend its abandon window; today only the state machine calls `touch`. The existing abandoned-row tests must stay green without edits.

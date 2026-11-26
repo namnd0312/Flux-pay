@@ -25,9 +25,11 @@ public class PaymentStateMachine {
     static {
         ALLOWED.put(PaymentStatus.CREATED,
                 Set.of(PaymentStatus.UNDER_REVIEW, PaymentStatus.PENDING, PaymentStatus.FAILED));
-        // Held by a risk rule: it can only end (rejected, timed out, or cancelled by the merchant).
+        // Held by a risk rule. It ends (rejected, timed out, cancelled by the merchant), or an
+        // operator approves it: that puts it back in CREATED, from where it goes to the provider
+        // exactly like a new payment. It never jumps straight to PENDING.
         ALLOWED.put(PaymentStatus.UNDER_REVIEW,
-                Set.of(PaymentStatus.FAILED, PaymentStatus.EXPIRED, PaymentStatus.CANCELLED));
+                Set.of(PaymentStatus.CREATED, PaymentStatus.FAILED, PaymentStatus.EXPIRED, PaymentStatus.CANCELLED));
         ALLOWED.put(PaymentStatus.PENDING,
                 Set.of(PaymentStatus.SUCCEEDED, PaymentStatus.FAILED, PaymentStatus.EXPIRED, PaymentStatus.CANCELLED));
         ALLOWED.put(PaymentStatus.SUCCEEDED, Set.of());

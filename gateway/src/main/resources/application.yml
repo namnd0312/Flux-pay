@@ -56,6 +56,9 @@ fluxpay:
     # The webhook path reads the payment with SELECT ... FOR NO KEY UPDATE; this is the
     # longest wait for that row lock before answering 503 (retry later).
     lock-timeout: 2s
+  risk:
+    # Time zone used to compute the hourOfDay fact that risk rules can test.
+    zone: Asia/Ho_Chi_Minh
   payment:
     # How long a PENDING payment stays payable before the sweeper expires it. Demo/env may override to 1m.
     expiry: 15m

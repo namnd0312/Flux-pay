@@ -12,6 +12,7 @@ import com.fluxpay.gateway.payment.IllegalPaymentTransitionException;
 import com.fluxpay.gateway.payment.PaymentNotFoundException;
 import com.fluxpay.gateway.provider.ProviderException;
 import com.fluxpay.gateway.provider.UnknownProviderException;
+import com.fluxpay.gateway.risk.RiskRejectedException;
 import com.fluxpay.gateway.webhook.WebhookBadSignatureException;
 import com.fluxpay.gateway.webhook.WebhookPayloadTooLargeException;
 import com.fluxpay.gateway.webhook.WebhookUnknownProviderException;
@@ -64,6 +65,16 @@ public class ProblemDetailsHandler {
     @ExceptionHandler(UnknownProviderException.class)
     public ProblemDetail onUnknownProvider(UnknownProviderException ex) {
         return writer.build(HttpStatus.BAD_REQUEST, "UNKNOWN_PROVIDER", ex.getMessage());
+    }
+
+    /**
+     * A risk rule refused the payment before anything was written. 422: the request is well
+     * formed and would be refused again as long as the rule stands. The reason code is the
+     * rule's own token, meant for the merchant.
+     */
+    @ExceptionHandler(RiskRejectedException.class)
+    public ProblemDetail onRiskRejected(RiskRejectedException ex) {
+        return writer.build(HttpStatus.UNPROCESSABLE_ENTITY, "RISK_REJECTED", ex.getMessage());
     }
 
     /** Provider call failed. The cause is already logged; the body carries no exception text. */

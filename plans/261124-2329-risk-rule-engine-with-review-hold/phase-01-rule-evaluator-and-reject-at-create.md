@@ -1,7 +1,7 @@
 ---
 phase: 1
 title: "Rule evaluator and reject at create"
-status: pending
+status: completed
 priority: P1
 dependencies: []
 effort: "1 session"
@@ -57,11 +57,11 @@ PaymentOrchestrator.create()
 8. Write note 10: fact model, why a whitelist and not SpEL, first-match vs collect-all, fail-open on a bad rule.
 
 ## Success Criteria
-- [ ] Acceptance 1, 3, 5 pass in `RiskRejectAtCreateIT`
-- [ ] Evaluator unit tests cover every operator and every compile rejection
-- [ ] No class in `risk` imports `com.fluxpay.gateway.payment`
-- [ ] All increment 1 and 2 tests green
-- [ ] Note 10 written with a "break it yourself" exercise
+- [x] Acceptance 1, 3, 5 pass in `RiskRejectAtCreateIT`
+- [x] Evaluator unit tests cover every operator and every compile rejection
+- [x] No class in `risk` imports `com.fluxpay.gateway.payment`
+- [x] All increment 1 and 2 tests green
+- [x] Note 10 written with a "break it yourself" exercise
 
 ## Risk Assessment
 - Seed rule blocks existing tests or JMeter plans: they use 1,000,000, threshold is 50,000,000; re-check after writing `V9`.

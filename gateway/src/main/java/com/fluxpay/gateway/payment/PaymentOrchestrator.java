@@ -2,6 +2,7 @@ package com.fluxpay.gateway.payment;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.UUID;
 
@@ -20,13 +21,18 @@ import com.fluxpay.gateway.provider.ProviderException;
 import com.fluxpay.gateway.provider.ProviderPaymentRequest;
 import com.fluxpay.gateway.provider.ProviderPaymentResult;
 import com.fluxpay.gateway.provider.ProviderRegistry;
+import com.fluxpay.gateway.risk.RiskDecision;
+import com.fluxpay.gateway.risk.RiskEngine;
+import com.fluxpay.gateway.risk.RiskFacts;
+import com.fluxpay.gateway.risk.RiskRejectedException;
 
 /**
  * Owns the transaction boundaries for the payment lifecycle. Status changes are delegated
  * to {@link PaymentStateMachine}; this class never calls {@code setStatus} directly, and
  * it never names a concrete provider (it resolves one through {@link ProviderRegistry}).
  *
- * <p>{@link #create} runs as two transactions around a provider HTTP call that is made
+ * <p>{@link #create} first asks the risk rules ({@link RiskEngine}); a rejection ends the
+ * request with nothing written. An allowed create then runs as two transactions around a provider HTTP call that is made
  * with no transaction open, so a pooled DB connection is never held for the length of an
  * HTTP timeout:
  * <ol>
@@ -56,6 +62,8 @@ public class PaymentOrchestrator {
     private final PaymentTransitionRepository transitions;
     private final PaymentStateMachine stateMachine;
     private final ProviderRegistry providers;
+    private final RiskEngine riskEngine;
+    private final ZoneId riskZone;
     private final TransactionTemplate tx;
     private final TransactionTemplate newTx;
     private final OptimisticRetry retry;
@@ -64,13 +72,17 @@ public class PaymentOrchestrator {
     private final Duration createdTimeout;
 
     public PaymentOrchestrator(PaymentRepository payments, PaymentTransitionRepository transitions,
-            PaymentStateMachine stateMachine, ProviderRegistry providers, PlatformTransactionManager txManager,
-            OptimisticRetry retry, Clock clock, @Value("${fluxpay.payment.expiry}") Duration expiry,
-            @Value("${fluxpay.payment.created-timeout}") Duration createdTimeout) {
+            PaymentStateMachine stateMachine, ProviderRegistry providers, RiskEngine riskEngine,
+            PlatformTransactionManager txManager, OptimisticRetry retry, Clock clock,
+            @Value("${fluxpay.payment.expiry}") Duration expiry,
+            @Value("${fluxpay.payment.created-timeout}") Duration createdTimeout,
+            @Value("${fluxpay.risk.zone}") ZoneId riskZone) {
         this.payments = payments;
         this.transitions = transitions;
         this.stateMachine = stateMachine;
         this.providers = providers;
+        this.riskEngine = riskEngine;
+        this.riskZone = riskZone;
         this.tx = new TransactionTemplate(txManager);
         this.newTx = new TransactionTemplate(txManager);
         this.newTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
@@ -85,7 +97,13 @@ public class PaymentOrchestrator {
         String code = (providerCode == null || providerCode.isBlank()) ? providers.defaultCode() : providerCode;
         PaymentProvider provider = providers.get(code);
 
+        // Ask the risk rules before writing anything: a rejection leaves no row and makes no provider call.
         var now = clock.instant();
+        RiskDecision decision = riskEngine.evaluate(RiskFacts.of(amount, code, merchantId, orderId, now, riskZone));
+        if (decision.outcome() == RiskDecision.Outcome.REJECT) {
+            throw new RiskRejectedException(decision.reasonCode()); // -> 422 RISK_REJECTED
+        }
+
         var payment = new Payment(UUID.randomUUID(), merchantId, orderId, amount, now.plus(expiry), now);
         UUID id = payment.getId();
 

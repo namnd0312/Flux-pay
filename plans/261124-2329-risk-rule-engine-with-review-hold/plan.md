@@ -1,7 +1,7 @@
 ---
 title: "Flux-pay Increment 3a: Risk Rule Engine with Review Hold (learning-first)"
 description: "Data-driven risk rule engine on payment creation (rules in Postgres, hand-written JSON condition evaluator, cached and audited), with REJECT and a REVIEW action that holds the payment in a new UNDER_REVIEW state until an operator approves or rejects it."
-status: pending
+status: in-progress
 priority: P2
 branch: "feat/risk-rule-engine"
 tags: [payment-gateway, learning, rule-engine, state-machine, backend, database]
@@ -82,7 +82,7 @@ Velocity or any stateful rule, rule CRUD API/UI, rule version history, routing r
 
 | Phase | Name | Status |
 |-------|------|--------|
-| 1 | [Rule evaluator and reject at create](./phase-01-rule-evaluator-and-reject-at-create.md) | Pending |
+| 1 | [Rule evaluator and reject at create](./phase-01-rule-evaluator-and-reject-at-create.md) | Done 2026-11-26 |
 | 2 | [Rule cache refresh and decision audit](./phase-02-rule-cache-refresh-and-decision-audit.md) | Pending |
 | 3 | [Under review payment state](./phase-03-under-review-payment-state.md) | Pending |
 | 4 | [Operator approve reject and races](./phase-04-operator-approve-reject-and-races.md) | Pending |

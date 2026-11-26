@@ -1,4 +1,4 @@
-# Flux-pay — Kiến trúc & Thiết kế tổng thể (Increment 1 + 2)
+# Flux-pay — Kiến trúc & Thiết kế tổng thể (Increment 1 + 2 + 3a)
 
 > Tài liệu "cái nhìn tổng thể" cho mini payment gateway. Mô tả **toàn bộ thiết kế increment 1** (6 phase), kèm luồng end-to-end, mô hình dữ liệu, và lý do từng quyết định. Đánh dấu rõ **cái gì đã build** vs **cái gì còn trong kế hoạch**.
 >
@@ -49,7 +49,7 @@ flowchart LR
   M -->|"GET /api/v1/payments/{id} (poll)"| GW
 ```
 
-Package trong gateway (`com.fluxpay.gateway`): `common`, `merchant`, `payment`, `provider`, `webhook`, `idempotency`. Mock-provider: `com.fluxpay.mockprovider`.
+Package trong gateway (`com.fluxpay.gateway`): `common`, `merchant`, `payment`, `provider`, `webhook`, `idempotency`. Từ increment 3a có thêm `risk` (mục 16). Mock-provider: `com.fluxpay.mockprovider`.
 
 **Nguyên tắc cố ý:** không front-load cấu trúc. Phase 1 chỉ có `common` + bảng `merchants`; mỗi package xuất hiện đúng phase của nó.
 
@@ -135,7 +135,7 @@ Gateway, mọi `/api/**` cần 3 header: `X-Merchant-Id`, `X-Timestamp`, `X-Sign
 
 | Method + Path | Vào | Ra | Ghi chú |
 |---|---|---|---|
-| `POST /api/v1/payments` | `{orderId, amount, description, returnUrl, provider?}` + `Idempotency-Key` | 201 `{paymentId, status, payUrl, expiresAt}` | Tạo payment. |
+| `POST /api/v1/payments` | `{orderId, amount, description, returnUrl, provider?}` + `Idempotency-Key` | 201 `{paymentId, status, payUrl, expiresAt}` | Tạo payment. **422 `RISK_REJECTED`** khi một risk rule từ chối (increment 3a). |
 | `GET /api/v1/payments/{id}` | — | payment + transitions | Scope theo merchant; id người khác → 404. |
 | `POST /api/v1/payments/{id}/cancel` | — | CANCELLED | Chỉ từ PENDING, else 409. |
 | `POST /webhooks/{providerCode}` | raw body đã ký | 200 `{received, duplicate, applied, rejectReason?}`, hoặc **503** `WEBHOOK_RETRY_LATER` khi nên gửi lại (increment 2) | Provider gọi. Không auth merchant. |
@@ -292,3 +292,25 @@ Chi tiết và số đo ở `docs/learning/06` → `09`. Tóm tắt những gì 
 **Load test.** `load-tests/` (JMeter + bất biến SQL; `run.sh` chỉ báo PASSED khi không sample nào hỏng, có tạo payment, mọi bất biến HARD = 0 và mock không rơi webhook). Provider nhanh: hàng đợi hình thành đầu tiên ở connection pool HikariCP (10), chưa xác nhận là nguyên nhân. Provider chậm: request thread Tomcat bị giữ suốt lời gọi provider là nút thắt (lượt 400 thread). Chi tiết: note 09.
 
 **Giới hạn còn lại** (increment 3-4): event kẹt `RECEIVED` khi JVM/DB chết giữa chừng; event `RETRYABLE` khi provider bỏ cuộc; "đã trả tiền nhưng payment `FAILED`" (`PAYMENT_NEVER_ACCEPTED`) cần reconciliation.
+
+## 16. Increment 3a: risk rule engine (đang làm, bắt đầu 2026-11-26)
+
+Chi tiết ở `docs/learning/10`. Kế hoạch: `plans/261124-2329-risk-rule-engine-with-review-hold/`. **Đã build: phase 1** (evaluator + `REJECT` lúc create). Chưa build: cache + audit (phase 2), trạng thái `UNDER_REVIEW` (phase 3), operator approve/reject (phase 4).
+
+**Package `risk`** không phụ thuộc `payment`. `payment` gọi vào `risk`, không có chiều ngược lại.
+
+| Lớp | Vai trò |
+|---|---|
+| `RiskFacts` | Những gì luật được nhìn: `amount, provider, merchantId, orderId, hourOfDay`. `FIELD_TYPES` là whitelist của ngôn ngữ luật. |
+| `RuleCompiler` | JSON condition → cây `Condition`; mọi kiểm tra ngữ pháp nằm ở đây. |
+| `Condition` | `All` / `Any` / `Leaf`; evaluate thuần, không I/O. |
+| `RiskRuleStore` | Đọc `risk_rules` bằng `JdbcClient`. |
+| `RiskEngine` | Xét luật theo `(priority, id)`, bỏ luật của merchant khác, luật khớp đầu tiên quyết định; không khớp = `ALLOW`. |
+
+**Bảng `risk_rules`** (V9): `id, name, merchant_id (null = mọi merchant), priority, condition JSONB, action ('REJECT'), reason_code, enabled`. Đổi luật bằng SQL; không có API.
+
+**Vị trí trong luồng create (bổ sung mục 4 và 10).** Sau khi resolve provider, **trước tx1**: `RiskEngine.evaluate(facts)`. `REJECT` → `RiskRejectedException` → 422 `RISK_REJECTED` (`detail` mang `reason_code`), không có dòng `payments`, không gọi provider. 422 là status được `IdempotencyFilter` lưu, nên cùng key sẽ replay lời từ chối mà không hỏi lại luật.
+
+**Luật hỏng** (không compile được) bị bỏ qua kèm log ERROR: fail-open cho riêng luật đó, không bao giờ thành 500.
+
+**Giới hạn hiện tại:** luật được đọc và compile trên mọi request; chưa lưu dấu vết quyết định.

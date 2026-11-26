@@ -107,6 +107,34 @@ variant was measured against it and removed; see
 **Lost a race.** A payment write that loses a version race is tried up to 3 times in total
 (2 retries); the caller then gets its business answer (for example `409 PAYMENT_ILLEGAL_TRANSITION`).
 
+## Risk rules (increment 3a)
+
+Before a payment is created, the gateway evaluates the enabled rows of `risk_rules` in
+`(priority, id)` order; the first rule whose condition matches decides, and no match means
+the payment is allowed. A `REJECT` match answers **`422 RISK_REJECTED`** (the `detail` carries
+the rule's `reason_code`), writes no payment row and calls no provider. The same
+`Idempotency-Key` replays that 422 without asking the rules again.
+
+Rules are changed with SQL only (`docker compose exec db psql -U flux_pay flux_pay`):
+
+```sql
+-- seeded: no payment above 50,000,000
+select id, name, merchant_id, priority, condition, action, reason_code, enabled from risk_rules;
+
+-- a stricter limit for one merchant; a lower priority number is tried first
+insert into risk_rules (name, merchant_id, priority, condition, action, reason_code)
+values ('demo-night-limit', '00000000-0000-0000-0000-000000000001', 10,
+        '{"all":[{"field":"amount","op":"gt","value":20000000},{"field":"hourOfDay","op":"gte","value":22}]}',
+        'REJECT', 'NIGHT_LIMIT');
+```
+
+A condition is `{"all":[...]}`, `{"any":[...]}` or a leaf `{"field","op","value"}`. Fields:
+`amount`, `hourOfDay` (numbers; hour in `fluxpay.risk.zone`), `provider`, `merchantId`,
+`orderId` (text). Operators: `eq ne gt gte lt lte in`. A rule that breaks this grammar is
+skipped with an ERROR log (`Risk rule <id> is invalid and was skipped`); it does not fail
+requests, and the payments it was meant to stop are let through. See
+[`docs/learning/10-rule-engine-facts-and-conditions.md`](docs/learning/10-rule-engine-facts-and-conditions.md).
+
 ## Load tests
 
 JMeter 5.6+ on the PATH, the compose stack running with the metrics override:

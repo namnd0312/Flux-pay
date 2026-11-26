@@ -305,7 +305,7 @@ Chi tiết và số đo ở `docs/learning/06` → `09`. Tóm tắt những gì 
 
 ## 16. Increment 3a: risk rule engine (2026-11-26)
 
-Chi tiết ở `docs/learning/10` → `13`. Kế hoạch: `plans/261124-2329-risk-rule-engine-with-review-hold/`. Cả 4 phase đã build: evaluator + `REJECT`, cache luật + audit, action `REVIEW` + trạng thái `UNDER_REVIEW`, operator approve/reject.
+Tài liệu tham chiếu đầy đủ (thiết kế, hướng dẫn sử dụng, cấu hình): `docs/risk-rule-engine-guide.md`. Lý do từng quyết định: `docs/learning/10` → `13`. Kế hoạch: `plans/261124-2329-risk-rule-engine-with-review-hold/`. Cả 4 phase đã build: evaluator + `REJECT`, cache luật + audit, action `REVIEW` + trạng thái `UNDER_REVIEW`, operator approve/reject.
 
 **Package `risk`** không phụ thuộc `payment`. `payment` gọi vào `risk`, không có chiều ngược lại.
 

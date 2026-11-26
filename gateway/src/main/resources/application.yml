@@ -74,6 +74,7 @@ fluxpay:
     # CREATED rows older than this are failed by the sweeper (create crashed before PENDING).
     created-timeout: 2m
   scheduling:
-    # Master switch for the expiry sweeper. Disabled in the test profile.
+    # Master switch for everything that runs on a timer: the expiry sweeper and the reload of
+    # risk rules. Disabled in the test profile.
     enabled: true
     sweep-interval: 30s

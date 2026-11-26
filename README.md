@@ -158,6 +158,8 @@ values ('demo-night-limit', '00000000-0000-0000-0000-000000000001', 10,
         'REJECT', 'NIGHT_LIMIT');
 ```
 
+Full reference (design, usage, configuration): [`docs/risk-rule-engine-guide.md`](docs/risk-rule-engine-guide.md).
+
 A condition is `{"all":[...]}`, `{"any":[...]}` or a leaf `{"field","op","value"}`. Fields:
 `amount`, `hourOfDay` (numbers; hour in `fluxpay.risk.zone`), `provider`, `merchantId`,
 `orderId` (text). Operators: `eq ne gt gte lt lte in`. A rule that breaks this grammar is

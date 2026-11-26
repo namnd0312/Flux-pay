@@ -53,7 +53,7 @@ union all
 -- charge. A FAILED/EXPIRED/CANCELLED row does not count: after a failed or abandoned create
 -- the merchant may legitimately create the order again.
 select 'HARD', 'orders_with_more_than_one_live_payment', count(*)
-from (select 1 from payments where status in ('CREATED', 'PENDING', 'SUCCEEDED')
+from (select 1 from payments where status in ('CREATED', 'UNDER_REVIEW', 'PENDING', 'SUCCEEDED')
       group by merchant_id, order_id having count(*) > 1) d
 union all
 select 'HARD', 'idempotency_keys_still_in_progress', count(*)

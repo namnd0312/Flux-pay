@@ -62,6 +62,8 @@ fluxpay:
     # How often the in-memory rules are reloaded from risk_rules. A rule changed by SQL takes
     # effect within this time; until then requests are decided by the previous rules.
     refresh-interval: 10s
+    # How long a payment held for review waits for an operator before the sweeper expires it.
+    review-timeout: 30m
   payment:
     # How long a PENDING payment stays payable before the sweeper expires it. Demo/env may override to 1m.
     expiry: 15m

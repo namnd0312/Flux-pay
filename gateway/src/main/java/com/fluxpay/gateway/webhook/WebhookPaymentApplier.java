@@ -125,8 +125,9 @@ class WebhookPaymentApplier {
             return WebhookOutcome.retryLater(payment.getId(), "PAYMENT_NOT_READY");
         }
         if (payment.getProviderRef() == null) {
-            // Left CREATED without ever recording a provider reference (create failed or was
-            // abandoned), yet the provider reports on it. Cannot be applied; keep the link.
+            // No provider reference was ever recorded (create failed or was abandoned, or the
+            // payment is held for review and no provider was called), yet the provider reports
+            // on it. Cannot be applied; keep the link.
             return WebhookOutcome.rejected(payment.getId(), "PAYMENT_NEVER_ACCEPTED");
         }
         if (providerCode.equals(payment.getProviderCode()) && payment.getProviderRef().equals(event.providerRef())) {

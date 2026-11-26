@@ -23,7 +23,11 @@ public class PaymentStateMachine {
     private static final Map<PaymentStatus, Set<PaymentStatus>> ALLOWED = new EnumMap<>(PaymentStatus.class);
 
     static {
-        ALLOWED.put(PaymentStatus.CREATED, Set.of(PaymentStatus.PENDING, PaymentStatus.FAILED));
+        ALLOWED.put(PaymentStatus.CREATED,
+                Set.of(PaymentStatus.UNDER_REVIEW, PaymentStatus.PENDING, PaymentStatus.FAILED));
+        // Held by a risk rule: it can only end (rejected, timed out, or cancelled by the merchant).
+        ALLOWED.put(PaymentStatus.UNDER_REVIEW,
+                Set.of(PaymentStatus.FAILED, PaymentStatus.EXPIRED, PaymentStatus.CANCELLED));
         ALLOWED.put(PaymentStatus.PENDING,
                 Set.of(PaymentStatus.SUCCEEDED, PaymentStatus.FAILED, PaymentStatus.EXPIRED, PaymentStatus.CANCELLED));
         ALLOWED.put(PaymentStatus.SUCCEEDED, Set.of());

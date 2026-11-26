@@ -12,7 +12,7 @@ import com.fluxpay.gateway.idempotency.IdempotencyService;
  * Periodically moves overdue PENDING payments to EXPIRED through the state machine, so
  * EXPIRED is reachable for the late-webhook demo in phase 4. Gated by the same flag as
  * {@link SchedulingConfig}: the bean does not even exist under the test profile, so tests
- * drive expiry deterministically via {@code orchestrator.expireOverdue()}.
+ * drive expiry deterministically via {@code sweeps.expireOverdue()}.
  *
  * <p>This is a deliberate minimal pull-forward from increment 4, which later hardens it
  * (batching, metrics); it is not rebuilt there.
@@ -23,18 +23,18 @@ class PaymentExpirySweeper {
 
     private static final Logger log = LoggerFactory.getLogger(PaymentExpirySweeper.class);
 
-    private final PaymentOrchestrator orchestrator;
+    private final PaymentSweepService sweeps;
     private final IdempotencyService idempotency;
 
-    PaymentExpirySweeper(PaymentOrchestrator orchestrator, IdempotencyService idempotency) {
-        this.orchestrator = orchestrator;
+    PaymentExpirySweeper(PaymentSweepService sweeps, IdempotencyService idempotency) {
+        this.sweeps = sweeps;
         this.idempotency = idempotency;
     }
 
     @Scheduled(fixedDelayString = "${fluxpay.scheduling.sweep-interval:30s}")
     void sweep() {
-        int expired = orchestrator.expireOverdue();
-        int abandoned = orchestrator.failAbandonedCreated();
+        int expired = sweeps.expireOverdue();
+        int abandoned = sweeps.failAbandonedCreated();
         int purgedKeys = idempotency.purgeExpired();
         if (expired > 0 || abandoned > 0 || purgedKeys > 0) {
             log.info("Sweeper moved {} payment(s) to EXPIRED, failed {} abandoned CREATED row(s), "

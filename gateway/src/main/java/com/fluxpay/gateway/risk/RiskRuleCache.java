@@ -111,6 +111,9 @@ public class RiskRuleCache implements SmartInitializingSingleton {
         if ("REJECT".equals(action)) {
             return RiskDecision.Outcome.REJECT;
         }
+        if ("REVIEW".equals(action)) {
+            return RiskDecision.Outcome.REVIEW;
+        }
         throw new InvalidRuleException("unknown action \"" + action + "\"");
     }
 }

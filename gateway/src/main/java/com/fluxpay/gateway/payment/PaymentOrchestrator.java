@@ -12,7 +12,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import com.fluxpay.gateway.idempotency.OrderAlreadyExistsException;
@@ -32,8 +31,9 @@ import com.fluxpay.gateway.risk.RiskRejectedException;
  * to {@link PaymentStateMachine}; this class never calls {@code setStatus} directly, and
  * it never names a concrete provider (it resolves one through {@link ProviderRegistry}).
  *
- * <p>{@link #create} first asks the risk rules ({@link RiskEngine}); a rejection ends the
- * request with only its decision recorded. An allowed create then runs as two transactions around a provider HTTP call that is made
+ * <p>{@link #create} first asks the risk rules ({@link RiskEngine}). A rejection ends the
+ * request with only its decision recorded. A review decision inserts the payment and moves it
+ * to UNDER_REVIEW in one transaction and stops there: no provider is called. An allowed create then runs as two transactions around a provider HTTP call that is made
  * with no transaction open, so a pooled DB connection is never held for the length of an
  * HTTP timeout:
  * <ol>
@@ -43,16 +43,11 @@ import com.fluxpay.gateway.risk.RiskRejectedException;
  * </ol>
  * A provider failure compensates the committed CREATED row to FAILED (502); any other
  * failure compensates to FAILED with an internal reason (500). A JVM death between tx1 and
- * tx2 leaves a CREATED row, which the sweeper later fails via {@link #failAbandonedCreated}.
+ * tx2 leaves a CREATED row, which {@link PaymentSweepService#failAbandonedCreated} later fails.
  *
  * <p>Every block that changes an existing payment runs through {@link OptimisticRetry}: two
  * writers can race on one row (webhook vs cancel vs sweeper), and the loser must re-read
- * and try again rather than fail. The sweeper is the exception: it already skips a row that
- * fails and re-evaluates it on the next sweep.
- *
- * <p>Two templates are built from the transaction manager: {@code tx} (default) for the
- * create/cancel steps, and {@code newTx} (REQUIRES_NEW) so the sweeper gives each row an
- * independent transaction. Building them here avoids mutating a shared bean at runtime.
+ * and try again rather than fail.
  */
 @Service
 public class PaymentOrchestrator {
@@ -67,18 +62,17 @@ public class PaymentOrchestrator {
     private final RiskDecisionStore riskDecisions;
     private final ZoneId riskZone;
     private final TransactionTemplate tx;
-    private final TransactionTemplate newTx;
     private final OptimisticRetry retry;
     private final Clock clock;
     private final Duration expiry;
-    private final Duration createdTimeout;
+    private final Duration reviewTimeout;
 
     public PaymentOrchestrator(PaymentRepository payments, PaymentTransitionRepository transitions,
             PaymentStateMachine stateMachine, ProviderRegistry providers, RiskEngine riskEngine,
             RiskDecisionStore riskDecisions, PlatformTransactionManager txManager, OptimisticRetry retry, Clock clock,
             @Value("${fluxpay.payment.expiry}") Duration expiry,
-            @Value("${fluxpay.payment.created-timeout}") Duration createdTimeout,
-            @Value("${fluxpay.risk.zone}") ZoneId riskZone) {
+            @Value("${fluxpay.risk.zone}") ZoneId riskZone,
+            @Value("${fluxpay.risk.review-timeout}") Duration reviewTimeout) {
         this.payments = payments;
         this.transitions = transitions;
         this.stateMachine = stateMachine;
@@ -87,12 +81,10 @@ public class PaymentOrchestrator {
         this.riskDecisions = riskDecisions;
         this.riskZone = riskZone;
         this.tx = new TransactionTemplate(txManager);
-        this.newTx = new TransactionTemplate(txManager);
-        this.newTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.retry = retry;
         this.clock = clock;
         this.expiry = expiry;
-        this.createdTimeout = createdTimeout;
+        this.reviewTimeout = reviewTimeout;
     }
 
     public Payment create(UUID merchantId, String orderId, long amount, String providerCode) {
@@ -109,7 +101,10 @@ public class PaymentOrchestrator {
             throw new RiskRejectedException(decision.reasonCode()); // -> 422 RISK_REJECTED
         }
 
-        var payment = new Payment(UUID.randomUUID(), merchantId, orderId, amount, now.plus(expiry), now);
+        // A held payment is not payable yet: its deadline is the review deadline.
+        boolean held = decision.outcome() == RiskDecision.Outcome.REVIEW;
+        var payment = new Payment(UUID.randomUUID(), merchantId, orderId, amount,
+                now.plus(held ? reviewTimeout : expiry), now);
         UUID id = payment.getId();
 
         try {
@@ -119,11 +114,22 @@ public class PaymentOrchestrator {
             // decision that let it through, and a rolled-back insert leaves no decision behind.
             tx.executeWithoutResult(status -> {
                 payments.saveAndFlush(payment);
+                if (held) {
+                    // Insert and hold commit together, so the row is never visible as a plain
+                    // CREATED payment that the sweeper could mistake for an abandoned create.
+                    payment.setProviderCode(code);
+                    stateMachine.transition(payment, PaymentStatus.UNDER_REVIEW, decision.reasonCode(),
+                            TransitionSource.SYSTEM);
+                }
                 riskDecisions.record(decision, facts, id, now);
             });
         } catch (DataIntegrityViolationException ex) {
             // Another live payment for (merchant, orderId) already exists; no row was committed.
             throw new OrderAlreadyExistsException(orderId);
+        }
+
+        if (held) {
+            return payment; // no provider call, no pay URL
         }
 
         ProviderPaymentResult result;
@@ -177,50 +183,5 @@ public class PaymentOrchestrator {
             stateMachine.transition(payment, PaymentStatus.CANCELLED, "MERCHANT_CANCEL", TransitionSource.MERCHANT);
             return payment;
         });
-    }
-
-    /**
-     * Move every overdue PENDING payment to EXPIRED. Each row runs in its own
-     * REQUIRES_NEW transaction and is caught individually, so one poison row cannot block
-     * the rest of the batch.
-     */
-    public int expireOverdue() {
-        return sweep(payments.findOverdueIds(PaymentStatus.PENDING, clock.instant()),
-                PaymentStatus.PENDING, PaymentStatus.EXPIRED, "EXPIRED_BY_SWEEPER");
-    }
-
-    /**
-     * Fail CREATED rows older than the created-timeout: these are payments where the
-     * create flow died between tx1 and tx2 (e.g. JVM crash), leaving an orphan CREATED row
-     * no provider ever accepted. Increment 4 reconciliation can instead query the provider.
-     */
-    public int failAbandonedCreated() {
-        return sweep(payments.findAbandonedCreatedIds(PaymentStatus.CREATED, clock.instant().minus(createdTimeout)),
-                PaymentStatus.CREATED, PaymentStatus.FAILED, "CREATE_ABANDONED");
-    }
-
-    private int sweep(List<UUID> ids, PaymentStatus expectedFrom, PaymentStatus to, String reasonCode) {
-        int moved = 0;
-        for (UUID id : ids) {
-            try {
-                Boolean done = newTx.execute(status -> sweepOne(id, expectedFrom, to, reasonCode));
-                if (Boolean.TRUE.equals(done)) {
-                    moved++;
-                }
-            } catch (RuntimeException ex) {
-                log.warn("Sweep {} -> {} failed for payment {}: {}", expectedFrom, to, id, ex.getMessage());
-            }
-        }
-        return moved;
-    }
-
-    private boolean sweepOne(UUID id, PaymentStatus expectedFrom, PaymentStatus to, String reasonCode) {
-        return payments.loadForSweep(id).map(payment -> {
-            if (payment.getStatus() != expectedFrom) {
-                return false; // already moved on between the id scan and now
-            }
-            stateMachine.transition(payment, to, reasonCode, TransitionSource.SYSTEM);
-            return true;
-        }).orElse(false);
     }
 }

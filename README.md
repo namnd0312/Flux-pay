@@ -115,6 +115,13 @@ the payment is allowed. A `REJECT` match answers **`422 RISK_REJECTED`** (the `d
 the rule's `reason_code`), writes no payment row and calls no provider. The same
 `Idempotency-Key` replays that 422 without asking the rules again.
 
+A `REVIEW` match holds the payment instead: the answer is `201` with `status: "UNDER_REVIEW"`
+and **`payUrl: null`**, and no provider is called. A held payment still occupies its order (a
+second create is `409 ORDER_ALREADY_EXISTS`), can be cancelled by the merchant, and is expired
+with reason `REVIEW_TIMEOUT` after `fluxpay.risk.review-timeout` (30m). Approving a held
+payment is not implemented yet. Seeded rules: above 50,000,000 is rejected, above 20,000,000
+is held.
+
 Rules are held compiled in memory and reloaded every `fluxpay.risk.refresh-interval` (10s), so a
 change takes effect within that time without a restart; until then requests are decided by the
 previous rules. If the reload cannot read the table, the rules loaded earlier stay in use.
@@ -126,7 +133,7 @@ its payment and carries the `payment_id`; a rejected one has none.
 Rules are changed with SQL only (`docker compose exec db psql -U flux_pay flux_pay`):
 
 ```sql
--- seeded: no payment above 50,000,000
+-- seeded: reject above 50,000,000 (priority 100), hold above 20,000,000 (priority 200)
 select id, name, merchant_id, priority, condition, action, reason_code, enabled from risk_rules;
 
 -- a stricter limit for one merchant; a lower priority number is tried first
@@ -141,8 +148,9 @@ A condition is `{"all":[...]}`, `{"any":[...]}` or a leaf `{"field","op","value"
 `orderId` (text). Operators: `eq ne gt gte lt lte in`. A rule that breaks this grammar is
 skipped with an ERROR log (`Risk rule <id> is invalid and was skipped`); it does not fail
 requests, and the payments it was meant to stop are let through. See
-[`docs/learning/10-rule-engine-facts-and-conditions.md`](docs/learning/10-rule-engine-facts-and-conditions.md)
-and [`docs/learning/11-rule-cache-and-decision-audit.md`](docs/learning/11-rule-cache-and-decision-audit.md).
+[`docs/learning/10-rule-engine-facts-and-conditions.md`](docs/learning/10-rule-engine-facts-and-conditions.md),
+[`11-rule-cache-and-decision-audit.md`](docs/learning/11-rule-cache-and-decision-audit.md) and
+[`12-review-hold-and-live-states.md`](docs/learning/12-review-hold-and-live-states.md).
 
 ## Load tests
 

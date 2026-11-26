@@ -102,6 +102,7 @@ Flyway quản lý schema (SQL thuần), `ddl-auto=validate` bắt lỗi lệch e
 CREATE UNIQUE INDEX ux_payments_live_order ON payments (merchant_id, order_id)
   WHERE status IN ('CREATED','PENDING','SUCCEEDED');
 ```
+Từ `V11` (increment 3a) predicate có thêm `'UNDER_REVIEW'`: payment đang bị giữ chờ duyệt cũng là payment còn sống (mục 16).
 Cố ý: đơn FAILED/EXPIRED/CANCELLED vẫn được tạo lại.
 
 ## 6. State machine của payment
@@ -111,6 +112,10 @@ stateDiagram-v2
   [*] --> CREATED
   CREATED --> PENDING: provider nhận
   CREATED --> FAILED: provider lỗi / abandoned
+  CREATED --> UNDER_REVIEW: risk rule REVIEW (increment 3a)
+  UNDER_REVIEW --> CANCELLED: merchant huỷ
+  UNDER_REVIEW --> EXPIRED: sweeper (quá hạn duyệt)
+  UNDER_REVIEW --> FAILED: operator từ chối (phase 4, chưa build)
   PENDING --> SUCCEEDED: webhook SUCCESS
   PENDING --> FAILED: webhook FAILED
   PENDING --> EXPIRED: sweeper (quá hạn)
@@ -123,7 +128,8 @@ stateDiagram-v2
 
 | Từ | Được phép sang |
 |---|---|
-| CREATED | PENDING, FAILED |
+| CREATED | UNDER_REVIEW, PENDING, FAILED |
+| UNDER_REVIEW | FAILED, EXPIRED, CANCELLED |
 | PENDING | SUCCEEDED, FAILED, EXPIRED, CANCELLED |
 | SUCCEEDED / FAILED / EXPIRED / CANCELLED | (terminal, không đi đâu) |
 
@@ -295,7 +301,7 @@ Chi tiết và số đo ở `docs/learning/06` → `09`. Tóm tắt những gì 
 
 ## 16. Increment 3a: risk rule engine (đang làm, bắt đầu 2026-11-26)
 
-Chi tiết ở `docs/learning/10` và `11`. Kế hoạch: `plans/261124-2329-risk-rule-engine-with-review-hold/`. **Đã build: phase 1** (evaluator + `REJECT` lúc create) và **phase 2** (cache luật + audit). Chưa build: trạng thái `UNDER_REVIEW` (phase 3), operator approve/reject (phase 4).
+Chi tiết ở `docs/learning/10` → `12`. Kế hoạch: `plans/261124-2329-risk-rule-engine-with-review-hold/`. **Đã build: phase 1** (evaluator + `REJECT` lúc create), **phase 2** (cache luật + audit) và **phase 3** (action `REVIEW`, trạng thái `UNDER_REVIEW`). Chưa build: operator approve/reject (phase 4).
 
 **Package `risk`** không phụ thuộc `payment`. `payment` gọi vào `risk`, không có chiều ngược lại.
 
@@ -309,7 +315,7 @@ Chi tiết ở `docs/learning/10` và `11`. Kế hoạch: `plans/261124-2329-ris
 | `RiskEngine` | Xét luật trong cache theo `(priority, id)`, bỏ luật của merchant khác, luật khớp đầu tiên quyết định; không khớp = `ALLOW`. Không I/O. |
 | `RiskDecisionStore` | Ghi một dòng `risk_decisions` cho mỗi lần đánh giá. |
 
-**Bảng `risk_rules`** (V9): `id, name, merchant_id (null = mọi merchant), priority, condition JSONB, action ('REJECT'), reason_code, enabled`. Đổi luật bằng SQL; không có API. Thay đổi có hiệu lực trong vòng một `refresh-interval`, không restart.
+**Bảng `risk_rules`** (V9): `id, name, merchant_id (null = mọi merchant), priority, condition JSONB, action ('REJECT' | 'REVIEW', V12), reason_code, enabled`. Seed: `amount > 50.000.000 → REJECT` (priority 100), `amount > 20.000.000 → REVIEW` (priority 200). Đổi luật bằng SQL; không có API. Thay đổi có hiệu lực trong vòng một `refresh-interval`, không restart.
 
 **Bảng `risk_decisions`** (V10, chỉ thêm): `merchant_id, order_id, payment_id (null khi REJECT), decision, matched_rule_id (không FK), reason_code, facts JSONB, created_at`. `facts` chỉ chứa năm fact, không bao giờ chứa header/chữ ký/secret.
 
@@ -317,8 +323,14 @@ Chi tiết ở `docs/learning/10` và `11`. Kế hoạch: `plans/261124-2329-ris
 - `REJECT` → ghi `risk_decisions` (một câu, tự commit) → `RiskRejectedException` → 422 `RISK_REJECTED` (`detail` mang `reason_code`); không có dòng `payments`, không gọi provider.
 - `ALLOW` → tx1 ghi `payments` **và** `risk_decisions` (kèm `payment_id`) trong cùng transaction; đơn trùng rollback cả hai.
 
+- `REVIEW` → **một** transaction: ghi `payments` (`CREATED`, `expires_at = now + fluxpay.risk.review-timeout`), chuyển `CREATED → UNDER_REVIEW` (reason = `reason_code` của luật), ghi `risk_decisions`. Trả 201 với `status = UNDER_REVIEW`, `payUrl = null`; **không gọi provider**.
+
+**`UNDER_REVIEW` là trạng thái live.** `ux_payments_live_order` (V11) giờ gồm `CREATED, UNDER_REVIEW, PENDING, SUCCEEDED`, nên create lại cùng order khi đang bị giữ → 409. `PaymentSweepService.expireOverdue()` quét cả `PENDING` (`EXPIRED_BY_SWEEPER`) lẫn `UNDER_REVIEW` (`REVIEW_TIMEOUT`). Merchant cancel được payment bị giữ. Webhook không chạm được vào nó (không có `provider_ref` → `PAYMENT_NEVER_ACCEPTED`).
+
+**Tách lớp.** Các bước chuyển theo thời gian (`expireOverdue`, `failAbandonedCreated`) đã chuyển từ `PaymentOrchestrator` sang `PaymentSweepService`.
+
 422 là status được `IdempotencyFilter` lưu, nên cùng key sẽ replay lời từ chối mà không đánh giá lại (không thêm dòng audit).
 
 **Hỏng hóc.** Một luật không compile được: bỏ qua kèm log ERROR (fail-open cho riêng luật đó, không bao giờ thành 500). Không đọc được bảng luật lúc refresh: giữ danh sách đã nạp trước đó.
 
-**Giới hạn hiện tại:** luật cũ tối đa 10s sau khi sửa; `risk_decisions` chưa có job dọn; luật hỏng chỉ có log.
+**Giới hạn hiện tại:** luật cũ tối đa 10s sau khi sửa; `risk_decisions` chưa có job dọn; luật hỏng chỉ có log; payment bị giữ chưa duyệt được (chỉ cancel hoặc hết hạn).

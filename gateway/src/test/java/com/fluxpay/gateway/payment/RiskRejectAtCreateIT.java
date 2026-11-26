@@ -28,7 +28,7 @@ import com.fluxpay.gateway.risk.RiskRuleCache;
  * changed by SQL decides requests once the rule cache has reloaded; a rule row that breaks the
  * grammar is skipped and never causes a 500.
  *
- * <p>The seeded rule is "amount above 50,000,000 is rejected". Rules added by a test are named
+ * <p>The seeded reject rule is "amount above 50,000,000 is rejected". Rules added by a test are named
  * {@code it-...} and removed afterwards, and the cache is reloaded, because every IT class
  * shares this database and this application context.
  */
@@ -112,11 +112,9 @@ class RiskRejectAtCreateIT extends AbstractIntegrationTest {
     }
 
     @Test
-    void exactlyAtTheLimitIsAllowed() throws Exception {
-        create(order(), 50_000_000)
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.status").value("PENDING"));
-        assertThat(fake.calls()).isEqualTo(1);
+    void exactlyAtTheLimitIsNotRejected() throws Exception {
+        // "gt" is strict: 50,000,000 passes the reject rule (the review rule holds it instead).
+        create(order(), 50_000_000).andExpect(status().isCreated());
     }
 
     @Test

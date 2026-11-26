@@ -18,7 +18,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.fluxpay.gateway.AbstractIntegrationTest;
-import com.fluxpay.gateway.payment.PaymentOrchestrator;
+import com.fluxpay.gateway.payment.PaymentSweepService;
 import com.jayway.jsonpath.JsonPath;
 
 /**
@@ -42,7 +42,7 @@ class WebhookIngestionIT extends AbstractIntegrationTest {
     com.fluxpay.gateway.MutableClock clock;
 
     @Autowired
-    PaymentOrchestrator orchestrator;
+    PaymentSweepService sweeps;
 
     @AfterEach
     void resetClock() {
@@ -153,7 +153,7 @@ class WebhookIngestionIT extends AbstractIntegrationTest {
     void lateWebhookOnExpiredIsRejected() throws Exception {
         String id = createPayment();
         clock.advance(Duration.ofMinutes(16));
-        orchestrator.expireOverdue();
+        sweeps.expireOverdue();
         Assertions.assertThat(paymentStatus(id)).isEqualTo("EXPIRED");
 
         String json = webhookJson("evt_" + UUID.randomUUID(), providerRefOf(id), id, "SUCCESS", AMOUNT);

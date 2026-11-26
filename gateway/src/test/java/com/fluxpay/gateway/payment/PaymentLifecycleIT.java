@@ -46,7 +46,7 @@ class PaymentLifecycleIT extends AbstractIntegrationTest {
     SecretCipher cipher;
 
     @Autowired
-    PaymentOrchestrator orchestrator;
+    PaymentSweepService sweeps;
 
     @AfterEach
     void resetClock() {
@@ -113,7 +113,7 @@ class PaymentLifecycleIT extends AbstractIntegrationTest {
     void sweeperExpiresOverduePending() throws Exception {
         String id = create(DEMO, DEMO_SECRET, "ORD-" + UUID.randomUUID());
         clock.advance(Duration.ofMinutes(16)); // expiry is 15m
-        int expired = orchestrator.expireOverdue();
+        int expired = sweeps.expireOverdue();
         org.assertj.core.api.Assertions.assertThat(expired).isGreaterThanOrEqualTo(1);
         mvc.perform(get("/api/v1/payments/" + id).with(hmac(DEMO, DEMO_SECRET, clock.millis(), null)))
                 .andExpect(status().isOk())

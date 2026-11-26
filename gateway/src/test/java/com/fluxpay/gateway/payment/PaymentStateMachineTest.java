@@ -22,7 +22,10 @@ class PaymentStateMachineTest {
     private static final Map<PaymentStatus, Set<PaymentStatus>> EXPECTED = new EnumMap<>(PaymentStatus.class);
 
     static {
-        EXPECTED.put(PaymentStatus.CREATED, Set.of(PaymentStatus.PENDING, PaymentStatus.FAILED));
+        EXPECTED.put(PaymentStatus.CREATED,
+                Set.of(PaymentStatus.UNDER_REVIEW, PaymentStatus.PENDING, PaymentStatus.FAILED));
+        EXPECTED.put(PaymentStatus.UNDER_REVIEW,
+                Set.of(PaymentStatus.FAILED, PaymentStatus.EXPIRED, PaymentStatus.CANCELLED));
         EXPECTED.put(PaymentStatus.PENDING,
                 Set.of(PaymentStatus.SUCCEEDED, PaymentStatus.FAILED, PaymentStatus.EXPIRED, PaymentStatus.CANCELLED));
         EXPECTED.put(PaymentStatus.SUCCEEDED, Set.of());
@@ -50,5 +53,13 @@ class PaymentStateMachineTest {
         for (PaymentStatus to : PaymentStatus.values()) {
             assertThat(PaymentStateMachine.isAllowed(terminal, to)).isFalse();
         }
+    }
+
+    /** A held payment has never reached a provider, so it can neither be payable nor paid. */
+    @org.junit.jupiter.api.Test
+    void aHeldPaymentCannotBecomePayableOrPaid() {
+        assertThat(PaymentStateMachine.isAllowed(PaymentStatus.UNDER_REVIEW, PaymentStatus.PENDING)).isFalse();
+        assertThat(PaymentStateMachine.isAllowed(PaymentStatus.UNDER_REVIEW, PaymentStatus.SUCCEEDED)).isFalse();
+        assertThat(PaymentStateMachine.isAllowed(PaymentStatus.PENDING, PaymentStatus.UNDER_REVIEW)).isFalse();
     }
 }

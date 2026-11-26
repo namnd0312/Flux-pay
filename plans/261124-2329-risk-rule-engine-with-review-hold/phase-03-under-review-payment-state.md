@@ -1,7 +1,7 @@
 ---
 phase: 3
 title: "Under review payment state"
-status: pending
+status: completed
 priority: P1
 dependencies: [2]
 effort: "1-2 sessions"
@@ -54,10 +54,10 @@ create(): decision REVIEW
 8. `./mvnw verify`; note 12: what "live" means, why the index and the state machine must change together, why the hold is one transaction.
 
 ## Success Criteria
-- [ ] Acceptance 6 passes
-- [ ] Held payment expires through the sweeper; cancel works
-- [ ] No webhook can move an `UNDER_REVIEW` payment (it has no `provider_ref`; test asserts lookup miss behaviour is unchanged)
-- [ ] `./mvnw verify` green; note 12 written
+- [x] Acceptance 6 passes
+- [x] Held payment expires through the sweeper; cancel works
+- [x] No webhook can move an `UNDER_REVIEW` payment (it has no `provider_ref`; test asserts lookup miss behaviour is unchanged)
+- [x] `./mvnw verify` green; note 12 written
 
 ## Risk Assessment
 - Contract change: clients that assume `payUrl` is non-null on 201. Documented in README in phase 4; Postman test updated here.

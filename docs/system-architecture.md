@@ -295,7 +295,7 @@ Chi tiết và số đo ở `docs/learning/06` → `09`. Tóm tắt những gì 
 
 ## 16. Increment 3a: risk rule engine (đang làm, bắt đầu 2026-11-26)
 
-Chi tiết ở `docs/learning/10`. Kế hoạch: `plans/261124-2329-risk-rule-engine-with-review-hold/`. **Đã build: phase 1** (evaluator + `REJECT` lúc create). Chưa build: cache + audit (phase 2), trạng thái `UNDER_REVIEW` (phase 3), operator approve/reject (phase 4).
+Chi tiết ở `docs/learning/10` và `11`. Kế hoạch: `plans/261124-2329-risk-rule-engine-with-review-hold/`. **Đã build: phase 1** (evaluator + `REJECT` lúc create) và **phase 2** (cache luật + audit). Chưa build: trạng thái `UNDER_REVIEW` (phase 3), operator approve/reject (phase 4).
 
 **Package `risk`** không phụ thuộc `payment`. `payment` gọi vào `risk`, không có chiều ngược lại.
 
@@ -305,12 +305,20 @@ Chi tiết ở `docs/learning/10`. Kế hoạch: `plans/261124-2329-risk-rule-en
 | `RuleCompiler` | JSON condition → cây `Condition`; mọi kiểm tra ngữ pháp nằm ở đây. |
 | `Condition` | `All` / `Any` / `Leaf`; evaluate thuần, không I/O. |
 | `RiskRuleStore` | Đọc `risk_rules` bằng `JdbcClient`. |
-| `RiskEngine` | Xét luật theo `(priority, id)`, bỏ luật của merchant khác, luật khớp đầu tiên quyết định; không khớp = `ALLOW`. |
+| `RiskRuleCache` | Danh sách luật đã compile, bất biến, giữ trong bộ nhớ; nạp lúc khởi động (hỏng thì không khởi động) và nạp lại mỗi `fluxpay.risk.refresh-interval` (10s) bằng cách thay cả tham chiếu `volatile`. |
+| `RiskEngine` | Xét luật trong cache theo `(priority, id)`, bỏ luật của merchant khác, luật khớp đầu tiên quyết định; không khớp = `ALLOW`. Không I/O. |
+| `RiskDecisionStore` | Ghi một dòng `risk_decisions` cho mỗi lần đánh giá. |
 
-**Bảng `risk_rules`** (V9): `id, name, merchant_id (null = mọi merchant), priority, condition JSONB, action ('REJECT'), reason_code, enabled`. Đổi luật bằng SQL; không có API.
+**Bảng `risk_rules`** (V9): `id, name, merchant_id (null = mọi merchant), priority, condition JSONB, action ('REJECT'), reason_code, enabled`. Đổi luật bằng SQL; không có API. Thay đổi có hiệu lực trong vòng một `refresh-interval`, không restart.
 
-**Vị trí trong luồng create (bổ sung mục 4 và 10).** Sau khi resolve provider, **trước tx1**: `RiskEngine.evaluate(facts)`. `REJECT` → `RiskRejectedException` → 422 `RISK_REJECTED` (`detail` mang `reason_code`), không có dòng `payments`, không gọi provider. 422 là status được `IdempotencyFilter` lưu, nên cùng key sẽ replay lời từ chối mà không hỏi lại luật.
+**Bảng `risk_decisions`** (V10, chỉ thêm): `merchant_id, order_id, payment_id (null khi REJECT), decision, matched_rule_id (không FK), reason_code, facts JSONB, created_at`. `facts` chỉ chứa năm fact, không bao giờ chứa header/chữ ký/secret.
 
-**Luật hỏng** (không compile được) bị bỏ qua kèm log ERROR: fail-open cho riêng luật đó, không bao giờ thành 500.
+**Vị trí trong luồng create (bổ sung mục 4 và 10).** Sau khi resolve provider, **trước tx1**: `RiskEngine.evaluate(facts)`.
+- `REJECT` → ghi `risk_decisions` (một câu, tự commit) → `RiskRejectedException` → 422 `RISK_REJECTED` (`detail` mang `reason_code`); không có dòng `payments`, không gọi provider.
+- `ALLOW` → tx1 ghi `payments` **và** `risk_decisions` (kèm `payment_id`) trong cùng transaction; đơn trùng rollback cả hai.
 
-**Giới hạn hiện tại:** luật được đọc và compile trên mọi request; chưa lưu dấu vết quyết định.
+422 là status được `IdempotencyFilter` lưu, nên cùng key sẽ replay lời từ chối mà không đánh giá lại (không thêm dòng audit).
+
+**Hỏng hóc.** Một luật không compile được: bỏ qua kèm log ERROR (fail-open cho riêng luật đó, không bao giờ thành 500). Không đọc được bảng luật lúc refresh: giữ danh sách đã nạp trước đó.
+
+**Giới hạn hiện tại:** luật cũ tối đa 10s sau khi sửa; `risk_decisions` chưa có job dọn; luật hỏng chỉ có log.

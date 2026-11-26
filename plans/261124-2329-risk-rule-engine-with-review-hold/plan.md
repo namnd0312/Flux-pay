@@ -83,7 +83,7 @@ Velocity or any stateful rule, rule CRUD API/UI, rule version history, routing r
 | Phase | Name | Status |
 |-------|------|--------|
 | 1 | [Rule evaluator and reject at create](./phase-01-rule-evaluator-and-reject-at-create.md) | Done 2026-11-26 |
-| 2 | [Rule cache refresh and decision audit](./phase-02-rule-cache-refresh-and-decision-audit.md) | Pending |
+| 2 | [Rule cache refresh and decision audit](./phase-02-rule-cache-refresh-and-decision-audit.md) | Done 2026-11-26 |
 | 3 | [Under review payment state](./phase-03-under-review-payment-state.md) | Pending |
 | 4 | [Operator approve reject and races](./phase-04-operator-approve-reject-and-races.md) | Pending |
 

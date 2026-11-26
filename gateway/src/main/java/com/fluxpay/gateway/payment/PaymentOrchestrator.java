@@ -22,6 +22,7 @@ import com.fluxpay.gateway.provider.ProviderPaymentRequest;
 import com.fluxpay.gateway.provider.ProviderPaymentResult;
 import com.fluxpay.gateway.provider.ProviderRegistry;
 import com.fluxpay.gateway.risk.RiskDecision;
+import com.fluxpay.gateway.risk.RiskDecisionStore;
 import com.fluxpay.gateway.risk.RiskEngine;
 import com.fluxpay.gateway.risk.RiskFacts;
 import com.fluxpay.gateway.risk.RiskRejectedException;
@@ -32,11 +33,11 @@ import com.fluxpay.gateway.risk.RiskRejectedException;
  * it never names a concrete provider (it resolves one through {@link ProviderRegistry}).
  *
  * <p>{@link #create} first asks the risk rules ({@link RiskEngine}); a rejection ends the
- * request with nothing written. An allowed create then runs as two transactions around a provider HTTP call that is made
+ * request with only its decision recorded. An allowed create then runs as two transactions around a provider HTTP call that is made
  * with no transaction open, so a pooled DB connection is never held for the length of an
  * HTTP timeout:
  * <ol>
- *   <li>tx1: insert the payment as CREATED and commit;</li>
+ *   <li>tx1: insert the payment as CREATED together with its risk decision, and commit;</li>
  *   <li>call the provider (no transaction);</li>
  *   <li>tx2: store the provider ref/pay URL and transition to PENDING.</li>
  * </ol>
@@ -63,6 +64,7 @@ public class PaymentOrchestrator {
     private final PaymentStateMachine stateMachine;
     private final ProviderRegistry providers;
     private final RiskEngine riskEngine;
+    private final RiskDecisionStore riskDecisions;
     private final ZoneId riskZone;
     private final TransactionTemplate tx;
     private final TransactionTemplate newTx;
@@ -73,7 +75,7 @@ public class PaymentOrchestrator {
 
     public PaymentOrchestrator(PaymentRepository payments, PaymentTransitionRepository transitions,
             PaymentStateMachine stateMachine, ProviderRegistry providers, RiskEngine riskEngine,
-            PlatformTransactionManager txManager, OptimisticRetry retry, Clock clock,
+            RiskDecisionStore riskDecisions, PlatformTransactionManager txManager, OptimisticRetry retry, Clock clock,
             @Value("${fluxpay.payment.expiry}") Duration expiry,
             @Value("${fluxpay.payment.created-timeout}") Duration createdTimeout,
             @Value("${fluxpay.risk.zone}") ZoneId riskZone) {
@@ -82,6 +84,7 @@ public class PaymentOrchestrator {
         this.stateMachine = stateMachine;
         this.providers = providers;
         this.riskEngine = riskEngine;
+        this.riskDecisions = riskDecisions;
         this.riskZone = riskZone;
         this.tx = new TransactionTemplate(txManager);
         this.newTx = new TransactionTemplate(txManager);
@@ -97,10 +100,12 @@ public class PaymentOrchestrator {
         String code = (providerCode == null || providerCode.isBlank()) ? providers.defaultCode() : providerCode;
         PaymentProvider provider = providers.get(code);
 
-        // Ask the risk rules before writing anything: a rejection leaves no row and makes no provider call.
+        // Ask the risk rules before creating anything: a rejection leaves no payment and makes no provider call.
         var now = clock.instant();
-        RiskDecision decision = riskEngine.evaluate(RiskFacts.of(amount, code, merchantId, orderId, now, riskZone));
+        RiskFacts facts = RiskFacts.of(amount, code, merchantId, orderId, now, riskZone);
+        RiskDecision decision = riskEngine.evaluate(facts);
         if (decision.outcome() == RiskDecision.Outcome.REJECT) {
+            riskDecisions.record(decision, facts, null, now); // one statement, committed on its own
             throw new RiskRejectedException(decision.reasonCode()); // -> 422 RISK_REJECTED
         }
 
@@ -110,7 +115,12 @@ public class PaymentOrchestrator {
         try {
             // tx1: CREATED committed. saveAndFlush forces the insert now, so a duplicate live
             // order (partial unique index ux_payments_live_order) fails here instead of later.
-            tx.execute(status -> payments.saveAndFlush(payment));
+            // The risk decision is written in the same transaction: a payment always has the
+            // decision that let it through, and a rolled-back insert leaves no decision behind.
+            tx.executeWithoutResult(status -> {
+                payments.saveAndFlush(payment);
+                riskDecisions.record(decision, facts, id, now);
+            });
         } catch (DataIntegrityViolationException ex) {
             // Another live payment for (merchant, orderId) already exists; no row was committed.
             throw new OrderAlreadyExistsException(orderId);

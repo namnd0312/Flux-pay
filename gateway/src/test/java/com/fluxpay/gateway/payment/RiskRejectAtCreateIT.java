@@ -20,15 +20,17 @@ import org.springframework.test.web.servlet.ResultActions;
 import com.fluxpay.gateway.AbstractIntegrationTest;
 import com.fluxpay.gateway.CountingFakeProvider;
 import com.fluxpay.gateway.MutableClock;
+import com.fluxpay.gateway.risk.RiskRuleCache;
 
 /**
  * Risk rules at payment creation. A matching REJECT rule answers 422 RISK_REJECTED before any
  * payment row is written or any provider is called; rules are data, so a rule inserted or
- * changed by SQL decides the very next request; a rule row that breaks the grammar is skipped
- * and never causes a 500.
+ * changed by SQL decides requests once the rule cache has reloaded; a rule row that breaks the
+ * grammar is skipped and never causes a 500.
  *
  * <p>The seeded rule is "amount above 50,000,000 is rejected". Rules added by a test are named
- * {@code it-...} and removed afterwards, because every IT class shares this database.
+ * {@code it-...} and removed afterwards, and the cache is reloaded, because every IT class
+ * shares this database and this application context.
  */
 class RiskRejectAtCreateIT extends AbstractIntegrationTest {
 
@@ -47,6 +49,9 @@ class RiskRejectAtCreateIT extends AbstractIntegrationTest {
     @Autowired
     MutableClock clock;
 
+    @Autowired
+    RiskRuleCache ruleCache;
+
     @BeforeEach
     void resetCounters() {
         fake.reset();
@@ -56,6 +61,7 @@ class RiskRejectAtCreateIT extends AbstractIntegrationTest {
     void restoreSeedRules() {
         jdbc.sql("delete from risk_rules where name like 'it-%'").update();
         jdbc.sql("update risk_rules set enabled = true where name = 'global-amount-limit'").update();
+        ruleCache.refresh();
         fake.reset();
         clock.reset();
     }
@@ -81,6 +87,7 @@ class RiskRejectAtCreateIT extends AbstractIntegrationTest {
                 .param("condition", condition)
                 .param("reason", reasonCode)
                 .update();
+        ruleCache.refresh();
     }
 
     private int paymentRows(String orderId) {
@@ -113,7 +120,7 @@ class RiskRejectAtCreateIT extends AbstractIntegrationTest {
     }
 
     @Test
-    void aRuleInsertedBySqlDecidesTheNextRequest() throws Exception {
+    void aRuleInsertedBySqlDecidesRequestsAfterTheCacheReloads() throws Exception {
         create(order(), 3_000_000).andExpect(status().isCreated());
 
         insertRule("it-lower-limit", null, 50, "{\"field\":\"amount\",\"op\":\"gt\",\"value\":2000000}",
@@ -164,6 +171,7 @@ class RiskRejectAtCreateIT extends AbstractIntegrationTest {
         create(orderId, 50_000_001, key).andExpect(status().isUnprocessableEntity());
 
         jdbc.sql("update risk_rules set enabled = false where name = 'global-amount-limit'").update();
+        ruleCache.refresh();
 
         // Same key: the stored 422 is replayed, the rules are not asked again.
         create(orderId, 50_000_001, key)

@@ -115,6 +115,14 @@ the payment is allowed. A `REJECT` match answers **`422 RISK_REJECTED`** (the `d
 the rule's `reason_code`), writes no payment row and calls no provider. The same
 `Idempotency-Key` replays that 422 without asking the rules again.
 
+Rules are held compiled in memory and reloaded every `fluxpay.risk.refresh-interval` (10s), so a
+change takes effect within that time without a restart; until then requests are decided by the
+previous rules. If the reload cannot read the table, the rules loaded earlier stay in use.
+
+Every evaluated request leaves one row in `risk_decisions` (decision, matched rule, reason
+code and the facts the rules saw). An allowed decision is written in the same transaction as
+its payment and carries the `payment_id`; a rejected one has none.
+
 Rules are changed with SQL only (`docker compose exec db psql -U flux_pay flux_pay`):
 
 ```sql
@@ -133,7 +141,8 @@ A condition is `{"all":[...]}`, `{"any":[...]}` or a leaf `{"field","op","value"
 `orderId` (text). Operators: `eq ne gt gte lt lte in`. A rule that breaks this grammar is
 skipped with an ERROR log (`Risk rule <id> is invalid and was skipped`); it does not fail
 requests, and the payments it was meant to stop are let through. See
-[`docs/learning/10-rule-engine-facts-and-conditions.md`](docs/learning/10-rule-engine-facts-and-conditions.md).
+[`docs/learning/10-rule-engine-facts-and-conditions.md`](docs/learning/10-rule-engine-facts-and-conditions.md)
+and [`docs/learning/11-rule-cache-and-decision-audit.md`](docs/learning/11-rule-cache-and-decision-audit.md).
 
 ## Load tests
 

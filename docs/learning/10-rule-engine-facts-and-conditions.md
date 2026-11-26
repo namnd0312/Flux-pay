@@ -115,8 +115,8 @@ Chọn fail-open vì ở đây một luật thiếu ít nguy hiểm hơn cả ga
 
 ## Giới hạn đã biết
 
-- **Đọc và compile luật trên mọi request.** Mỗi lần create tốn thêm một query và một lượt parse JSON cho mọi luật. Cố ý để vậy ở phase này; phase 2 đo cái giá rồi sửa bằng cache.
-- **Không có dấu vết quyết định.** Request được `ALLOW` hay `REJECT` vì luật nào, với fact gì — không lưu ở đâu ngoài response. Phase 2 thêm bảng audit.
+- **Đọc và compile luật trên mọi request** (ở phase này). Đã sửa ở phase 2 bằng cache: xem note 11.
+- **Không có dấu vết quyết định** (ở phase này). Đã sửa ở phase 2 bằng bảng `risk_decisions`: xem note 11.
 - **Fact không có state.** Không viết được luật kiểu "quá 5 payment trong 1 phút" (velocity); ngoài phạm vi increment này.
 - **Đổi luật chỉ bằng SQL**, không có API/UI, không có lịch sử phiên bản luật.
 - `hourOfDay` tính theo `fluxpay.risk.zone` (mặc định `Asia/Ho_Chi_Minh`), không theo múi giờ của merchant.
@@ -126,7 +126,7 @@ Chọn fail-open vì ở đây một luật thiếu ít nguy hiểm hơn cả ga
 Folder **Phase 10 - Risk rules**. Mở psql: `docker compose exec db psql -U flux_pay flux_pay`.
 
 1. Request 1 (1.000.000) → `201`. Request 2 (50.000.001) → `422 RISK_REJECTED`, `detail` chứa `AMOUNT_OVER_LIMIT`. Kiểm tra: `select count(*) from payments where amount = 50000001;` → 0.
-2. Request 3 (6.000.000) → `201`. Chạy `update risk_rules set condition = '{"field":"amount","op":"gt","value":5000000}' where name = 'global-amount-limit';` rồi gửi lại request 3 → `422`, **không restart**. Trả lại giá trị cũ sau khi thử.
+2. Request 3 (6.000.000) → `201`. Chạy `update risk_rules set condition = '{"field":"amount","op":"gt","value":5000000}' where name = 'global-amount-limit';` rồi gửi lại request 3 → `422`, **không restart** (từ phase 2 phải chờ tối đa 10s cho cache nạp lại, xem note 11). Trả lại giá trị cũ sau khi thử.
 
 ## Tự phá thử (bài tập)
 

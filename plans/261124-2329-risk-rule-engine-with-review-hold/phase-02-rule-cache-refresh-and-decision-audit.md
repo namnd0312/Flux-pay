@@ -1,7 +1,7 @@
 ---
 phase: 2
 title: "Rule cache refresh and decision audit"
-status: pending
+status: completed
 priority: P1
 dependencies: [1]
 effort: "1 session"
@@ -46,10 +46,10 @@ Stop reading rules per request: compile once, cache, refresh on a schedule. Reco
 8. Note 11: cache staleness window, atomic swap, why audit sits in the payment transaction, what the audit table must never contain.
 
 ## Success Criteria
-- [ ] Acceptance 2 and 4 pass
-- [ ] No rule `SELECT` on the request path (statement count back to the pre-phase-1 number plus one audit insert)
-- [ ] Failed refresh keeps the last good rule set (test)
-- [ ] `./mvnw verify` green; note 11 written
+- [x] Acceptance 2 and 4 pass
+- [x] No rule `SELECT` on the request path (statement count back to the pre-phase-1 number plus one audit insert)
+- [x] Failed refresh keeps the last good rule set (test)
+- [x] `./mvnw verify` green; note 11 written
 
 ## Risk Assessment
 - Tests in other classes share the Spring context and the cache: each IT that inserts rules must clean `risk_rules` back to the seed and call `refresh()` in teardown.

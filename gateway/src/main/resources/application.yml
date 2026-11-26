@@ -59,6 +59,9 @@ fluxpay:
   risk:
     # Time zone used to compute the hourOfDay fact that risk rules can test.
     zone: Asia/Ho_Chi_Minh
+    # How often the in-memory rules are reloaded from risk_rules. A rule changed by SQL takes
+    # effect within this time; until then requests are decided by the previous rules.
+    refresh-interval: 10s
   payment:
     # How long a PENDING payment stays payable before the sweeper expires it. Demo/env may override to 1m.
     expiry: 15m

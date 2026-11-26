@@ -13,8 +13,8 @@ import com.fluxpay.gateway.risk.RiskRuleStore.RuleRow;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * Conflict resolution and the bad-rule policy, without a database: rows are handed to the
- * engine in the order the store returns them ({@code priority}, then {@code id}).
+ * Conflict resolution and the bad-rule policy, without a database: rows are compiled and
+ * evaluated in the order the store returns them ({@code priority}, then {@code id}).
  */
 class RiskEngineTest {
 
@@ -23,14 +23,14 @@ class RiskEngineTest {
     private static final String OVER_1000 = "{\"field\":\"amount\",\"op\":\"gt\",\"value\":1000}";
     private static final String OVER_10 = "{\"field\":\"amount\",\"op\":\"gt\",\"value\":10}";
 
-    private final RiskEngine engine = new RiskEngine(null, new RuleCompiler(JsonMapper.builder().build()));
+    private final RiskRuleCache cache = new RiskRuleCache(null, new RuleCompiler(JsonMapper.builder().build()));
 
     private static RiskFacts facts(UUID merchant, long amount) {
         return new RiskFacts(amount, "MOCK", merchant, "ORD-1", 12);
     }
 
     private RiskDecision decide(List<RuleRow> rows, RiskFacts facts) {
-        return RiskEngine.decide(engine.compile(rows), facts);
+        return RiskEngine.decide(cache.compile(rows), facts);
     }
 
     @Test
@@ -86,7 +86,7 @@ class RiskEngineTest {
                 new RuleRow(1, null, 1, "{\"field\":\"nope\",\"op\":\"eq\",\"value\":1}", "REJECT", "BROKEN"),
                 new RuleRow(2, null, 2, OVER_10, "FLAG", "UNKNOWN_ACTION"),
                 new RuleRow(3, null, 3, OVER_1000, "REJECT", "AMOUNT_OVER_LIMIT"));
-        assertThat(engine.compile(rows)).extracting(CompiledRule::id).containsExactly(3L);
+        assertThat(cache.compile(rows)).extracting(CompiledRule::id).containsExactly(3L);
         assertThat(decide(rows, facts(MERCHANT_A, 5000)).reasonCode()).isEqualTo("AMOUNT_OVER_LIMIT");
     }
 }
